@@ -1,2 +1,27 @@
-# QUANTUM-TRADE-AI-V2
-QUANTUM TRADE AI — Intelligent Trading Telegram Platform
+# QUANTUM TRADE AI
+
+Интеллектуальный Telegram-бот для получения торговых сигналов.
+
+## Возможности
+- Получение сигналов из канала SIGNALS PRO.
+- История сигналов.
+- Статистика.
+- Уведомления об изменениях публикаций.
+- Автоматический бот.
+- Административная панель.
+
+## Установка
+
+Установить зависимости:
+
+pip install -r requirements.txt
+
+## Настройка GitHub Secrets
+
+Добавить секреты:
+- TOKEN_USER
+- TOKEN_ADMIN
+
+## Запуск
+
+python bot.py
