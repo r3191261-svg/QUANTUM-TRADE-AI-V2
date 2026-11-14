@@ -14,8 +14,6 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     Message,
@@ -60,7 +58,7 @@ NEWS_RSS_URL = os.getenv("NEWS_RSS_URL", "").strip() or "https://www.investing.c
 NEWS_POLL_SECONDS = max(60, int(os.getenv("NEWS_POLL_SECONDS", "").strip() or "300"))
 NEWS_LIMIT = 100
 NEWS_REPUBLISH_ALLOWED = os.getenv("NEWS_REPUBLISH_ALLOWED", "false").strip().lower() == "true"
-SUPPORT_URL = os.getenv("SUPPORT_URL", "").strip()
+SUPPORT_URL = "https://t.me/copy_broker_BO_bot"
 LOCAL_TZ = timezone(timedelta(hours=5), "Asia/Tashkent")
 
 # ISO 4217 currency codes plus commonly quoted crypto tickers. Signals are
@@ -87,10 +85,6 @@ admin_dp = Dispatcher()
 
 # Set in main(); admin handlers use this bot to deliver user broadcasts.
 USER_BOT: Bot | None = None
-
-
-class SupportStates(StatesGroup):
-    waiting_for_message = State()
 
 
 # =========================================================
@@ -982,7 +976,6 @@ async def autotrade_handler(message: Message):
     if not await check_user(message):
         return
 
-    support_button_action = {"url": SUPPORT_URL} if SUPPORT_URL else {"callback_data": "support_admin"}
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="📝 Регистрация в Intrade Bar",
@@ -990,9 +983,9 @@ async def autotrade_handler(message: Message):
             style="primary",
         )],
         [InlineKeyboardButton(
-            text="📩 Поддержка QUANTUM TRADE AI",
+            text="📩 Поддержка",
             style="primary",
-            **support_button_action,
+            url=SUPPORT_URL,
         )],
     ])
 
@@ -1002,53 +995,10 @@ async def autotrade_handler(message: Message):
         "Для подключения автоматической торговли необходим аккаунт Intrade Bar.\n\n"
         "Если у вас ещё нет аккаунта — зарегистрируйтесь "
         "по кнопке ниже.\n\n"
-        "Если аккаунт уже есть — нажмите «Поддержка QUANTUM TRADE AI» "
-        "и отправьте администратору сообщение. Поддержка поможет проверить "
-        "возможность подключения и настроить автоматическую торговлю.\n\n"
-        "Для подключения и настройки свяжитесь с администратором QUANTUM TRADE AI.",
+        "Если аккаунт уже есть — нажмите кнопку «Поддержка», чтобы открыть "
+        "Telegram-чат поддержки и уточнить условия подключения.",
         reply_markup=keyboard,
     )
-
-
-@user_dp.callback_query(F.data == "support_admin")
-async def support_admin_start(callback: CallbackQuery, state: FSMContext):
-    user = get_user(callback.from_user.id)
-    if not user or user[3] != "active":
-        await callback.answer("Доступ ограничен.", show_alert=True)
-        return
-    await state.set_state(SupportStates.waiting_for_message)
-    await callback.answer()
-    await callback.message.answer("Напишите одним сообщением, с чем нужна помощь. Для отмены: /cancel")
-
-
-@user_dp.message(Command("cancel"), SupportStates.waiting_for_message)
-async def support_admin_cancel(message: Message, state: FSMContext):
-    await state.clear()
-    await message.answer("Обращение отменено.", reply_markup=main_keyboard)
-
-
-@user_dp.message(SupportStates.waiting_for_message)
-async def support_admin_message(message: Message, state: FSMContext, bot: Bot):
-    if not message.from_user or not message.text:
-        await message.answer("Отправьте текст или /cancel для отмены.")
-        return
-    await state.clear()
-    user = message.from_user
-    text = (
-        "📩 <b>Обращение пользователя</b>\n"
-        f"ID: <code>{user.id}</code>\n"
-        f"Имя: {html.escape(user.full_name or '')}\n"
-        f"Username: @{html.escape(user.username or 'нет')}\n\n"
-        f"{html.escape(message.text[:3500])}\n\n"
-        f"Ответ: <code>/reply {user.id} текст</code>"
-    )
-    try:
-        await bot.send_message(OWNER_ID, text)
-    except TelegramAPIError:
-        log.exception("Could not deliver support request from user %s", user.id)
-        await message.answer("Не удалось передать обращение. Попробуйте позже.", reply_markup=main_keyboard)
-        return
-    await message.answer("✅ Обращение передано администратору.", reply_markup=main_keyboard)
 
 
 # =========================================================

@@ -184,8 +184,9 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         registration, support = markup.inline_keyboard[0][0], markup.inline_keyboard[1][0]
         self.assertEqual(registration.style, "primary")
         self.assertEqual(support.style, "primary")
-        self.assertEqual(support.callback_data, "support_admin")
-        self.assertIsNone(support.url)
+        self.assertIsNone(support.callback_data)
+        self.assertEqual(support.url, "https://t.me/copy_broker_BO_bot")
+        self.assertNotIn("отправьте администратору сообщение", text.lower())
 
     async def test_user_crypto_pair_list_matches_requested_twenty_pairs(self):
         callback = FakeCallback("crypto_pairs")
