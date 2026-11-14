@@ -2,8 +2,13 @@ import asyncio
 import html
 import logging
 import os
+import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from contextlib import contextmanager
+
+import aiohttp
+import feedparser
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -45,9 +50,24 @@ EXTRA_ADMIN_IDS = {
 
 # Numeric ID of the source Telegram channel SIGNALS PRO.
 SOURCE_CHANNEL_ID = -1003979525371
+NEWS_RSS_URL = os.getenv("NEWS_RSS_URL", "").strip() or "https://www.investing.com/rss/news.rss"
+NEWS_POLL_SECONDS = max(60, int(os.getenv("NEWS_POLL_SECONDS", "").strip() or "300"))
+NEWS_LIMIT = 100
+NEWS_REPUBLISH_ALLOWED = os.getenv("NEWS_REPUBLISH_ALLOWED", "false").strip().lower() == "true"
+SUPPORT_URL = os.getenv("SUPPORT_URL", "").strip()
+LOCAL_TZ = timezone(timedelta(hours=5), "Asia/Tashkent")
+
+# ISO 4217 currency codes plus commonly quoted crypto tickers. Signals are
+# counted only when a recognizable pair is actually present in a source post.
+PAIR_CODES = set("AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB BRL BSD BTN BWP BYN BZD CAD CDF CHF CLP CNY COP CRC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL GHS GIP GMD GNF GTQ GYD HKD HNL HRK HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK SGD SHP SLE SLL SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD UYU UZS VES VND VUV WST XAF XAG XAU XCD XCG XDR XOF XPD XPF XPT YER ZAR ZMW ZWL BTC ETH USDT USDC TON SOL XRP DOGE BNB ADA TRX DOT LTC BCH AVAX".split())
+PAIR_CODE_PATTERN = "|".join(re.escape(code) for code in sorted(PAIR_CODES, key=len, reverse=True))
+PAIR_RE = re.compile(
+    rf"(?<![A-Z0-9])(?P<base>{PAIR_CODE_PATTERN})\s*[/_-]?\s*(?P<quote>{PAIR_CODE_PATTERN})(?![A-Z0-9])",
+    re.I,
+)
 
 DB_PATH = os.getenv("DB_PATH", "quantum.db")
-INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "FB267F10-57AF-4B85-B2B6-643C9F3EFEE5.gif")
+INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif")
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
 
 logging.basicConfig(
@@ -71,8 +91,17 @@ class SupportStates(StatesGroup):
 # DATABASE
 # =========================================================
 
+@contextmanager
 def connect_db():
-    return sqlite3.connect(DB_PATH, timeout=30)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def now():
@@ -139,6 +168,20 @@ def init_db():
                 created_at TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS news (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_key TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                url TEXT NOT NULL,
+                image_url TEXT DEFAULT '',
+                published_at TEXT,
+                fetched_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_source_posts_created_at ON source_posts(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_news_published_at ON news(published_at)")
         columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "signals_consent" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN signals_consent INTEGER DEFAULT -1")
@@ -217,6 +260,87 @@ def audit(actor, action, target=None):
         """, (actor, action, target, now()))
 
 
+def extract_pairs(text):
+    """Return only recognized quote pairs mentioned in real source text."""
+    pairs = set()
+    for match in PAIR_RE.finditer((text or "").upper()):
+        base, quote = match.group("base"), match.group("quote")
+        if base in PAIR_CODES and quote in PAIR_CODES and base != quote:
+            pairs.add(f"{base}/{quote}")
+    return pairs
+
+
+def clean_feed_text(value):
+    value = re.sub(r"<br\s*/?>", "\n", value or "", flags=re.I)
+    value = re.sub(r"</p\s*>", "\n", value, flags=re.I)
+    value = re.sub(r"<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", html.unescape(value)).strip()
+
+
+def feed_entry_image(entry):
+    for item in (getattr(entry, "media_content", None) or []):
+        url = item.get("url")
+        if url and url.startswith("https://"):
+            return url
+    for item in (getattr(entry, "media_thumbnail", None) or []):
+        url = item.get("url")
+        if url and url.startswith("https://"):
+            return url
+    for item in (getattr(entry, "enclosures", None) or []):
+        url = item.get("href") or item.get("url")
+        if url and (item.get("type", "").startswith("image/") or re.search(r"\.(?:png|jpe?g|webp)(?:\?|$)", url, re.I)):
+            return url
+    html_content = " ".join([getattr(entry, "summary", "") or ""] + [
+        item.get("value", "") for item in (getattr(entry, "content", None) or [])
+    ])
+    match = re.search(r'<img\b[^>]*\bsrc=["\'](https://[^"\']+)', html_content, re.I)
+    return match.group(1) if match else ""
+
+
+async def fetch_and_store_news():
+    """Read Investing.com's published RSS feed and persist deduplicated items."""
+    if not NEWS_REPUBLISH_ALLOWED:
+        log.info("RSS ingestion disabled until redistribution rights are confirmed/configured.")
+        return 0
+    timeout = aiohttp.ClientTimeout(total=15)
+    headers = {"User-Agent": "QUANTUM-TRADE-AI/2.0"}
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(NEWS_RSS_URL, allow_redirects=True) as response:
+                response.raise_for_status()
+                payload = await response.read()
+        parsed = feedparser.parse(payload)
+        if parsed.bozo and not parsed.entries:
+            raise ValueError(f"Invalid RSS feed: {parsed.bozo_exception}")
+        inserted = 0
+        for entry in parsed.entries[:NEWS_LIMIT]:
+            title = clean_feed_text(getattr(entry, "title", ""))
+            url = (getattr(entry, "link", "") or "").strip()
+            source_key = (getattr(entry, "id", "") or url).strip()
+            if not title or not url.startswith("https://") or not source_key:
+                continue
+            raw_description = getattr(entry, "summary", "") or ""
+            if not raw_description and getattr(entry, "content", None):
+                raw_description = entry.content[0].get("value", "")
+            description = clean_feed_text(raw_description)[:1800]
+            published = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+            published_at = datetime(*published[:6], tzinfo=timezone.utc).isoformat() if published else None
+            with connect_db() as conn:
+                cursor = conn.execute("""
+                    INSERT OR IGNORE INTO news
+                    (source_key, title, description, url, image_url, published_at, fetched_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (source_key, title, description, url, feed_entry_image(entry), published_at, now()))
+                inserted += cursor.rowcount
+        log.info("Investing.com RSS refresh finished; new items=%s", inserted)
+        return inserted
+    except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as error:
+        log.warning("Could not refresh Investing.com RSS: %s", error)
+    except Exception:
+        log.exception("Unexpected error while reading Investing.com RSS")
+    return 0
+
+
 # =========================================================
 # KEYBOARDS
 # =========================================================
@@ -267,6 +391,12 @@ def admin_keyboard():
         [colored_button("🛡 Администраторы", "admin_manage", "primary")],
         [colored_button("📋 Журнал действий", "admin_audit", "primary")],
         [colored_button("⚙️ Настройки бота", "admin_settings", "primary")],
+    ])
+
+
+def admin_back_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [colored_button("↩️ К панели администратора", "admin_home", "primary")]
     ])
 
 
@@ -379,6 +509,11 @@ async def start_handler(message: Message):
                     log.info("Intro GIF is not configured; continuing without it.")
             except TelegramAPIError:
                 log.exception("Could not send intro GIF")
+                with connect_db() as conn:
+                    conn.execute(
+                        "UPDATE users SET intro_sent=0 WHERE user_id=?",
+                        (message.from_user.id,),
+                    )
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [colored_button("🟢 ✅ ПРИНЯТЬ", "signals_accept", "success")],
@@ -449,17 +584,140 @@ async def options_handler(message: Message):
         return
 
     await message.answer(
-        "⚡ QUANTUM OPTIONS AI\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "🎯 АНАЛИТИКА БИНАРНЫХ ОПЦИОНОВ\n\n"
-        "📊 Анализ инструментов\n"
-        "🔔 Торговые сигналы из SIGNALS PRO\n"
-        "⏱ Таймфреймы M1 / M5 / M15\n"
-        "📈 История сигналов\n"
-        "📉 Статистика\n\n"
-        "Новые публикации SIGNALS PRO будут автоматически "
-        "поступать в этот бот."
+        "⚡ <b>БИНАРНЫЕ ОПЦИОНЫ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+        "Выберите нужный раздел. Данные строятся только по публикациям SIGNALS PRO.",
+        reply_markup=binary_menu_keyboard(),
     )
+
+
+def binary_menu_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [colored_button("💱 ВСЕ ВАЛЮТНЫЕ ПАРЫ", "binary_all_pairs", "primary")],
+        [colored_button("🕘 СИГНАЛЫ ЗА ПОСЛЕДНИЕ 10 МИНУТ", "binary_recent_10", "primary")],
+    ])
+
+
+@user_dp.callback_query(F.data == "binary_all_pairs")
+async def binary_all_pairs(callback: CallbackQuery):
+    await show_pair_page(callback, 0)
+    await callback.answer()
+
+
+async def show_pair_page(callback: CallbackQuery, offset):
+    pairs = {}
+    with connect_db() as conn:
+        posts = conn.execute("SELECT message_id, text FROM source_posts ORDER BY created_at DESC").fetchall()
+    for message_id, body in posts:
+        for pair in extract_pairs(body):
+            pairs.setdefault(pair, {"count": 0, "last_id": message_id})["count"] += 1
+    if not pairs:
+        await callback.message.edit_text(
+            "💱 <b>ВАЛЮТНЫЕ ПАРЫ SIGNALS PRO</b>\n\n"
+            "В сохранённых публикациях пока не найдено сигналов с распознанными валютными парами.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [colored_button("⬅️ Назад", "binary_menu", "primary")]
+            ]),
+        )
+        return
+    ordered = sorted(pairs.items(), key=lambda item: (-item[1]["count"], item[0]))
+    page_size = 20
+    page = ordered[offset:offset + page_size]
+    lines = [f"💱 <b>ВАЛЮТНЫЕ ПАРЫ SIGNALS PRO</b> · {offset+1}–{offset+len(page)} из {len(ordered)}", "━━━━━━━━━━━━━━━━━━"]
+    buttons = []
+    for pair, values in page:
+        lines.append(f"\n<b>{pair}</b> — {values['count']} сигнал(ов)")
+        buttons.append([colored_button(f"{pair} · {values['count']}", f"pair:{pair}", "primary")])
+    nav = []
+    if offset > 0:
+        nav.append(colored_button("⬅️ Назад", f"pairs_page:{max(0, offset-page_size)}", "primary"))
+    if offset + page_size < len(ordered):
+        nav.append(colored_button("Далее ➡️", f"pairs_page:{offset+page_size}", "primary"))
+    if nav:
+        buttons.append(nav)
+    buttons.append([colored_button("⬅️ Назад", "binary_menu", "primary")])
+    await callback.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@user_dp.callback_query(F.data.startswith("pairs_page:"))
+async def pair_page_callback(callback: CallbackQuery):
+    try:
+        offset = max(0, int(callback.data.split(":", 1)[1]))
+    except ValueError:
+        await callback.answer("Некорректная страница.", show_alert=True)
+        return
+    await show_pair_page(callback, offset)
+    await callback.answer()
+
+
+@user_dp.callback_query(F.data == "binary_recent_10")
+async def binary_recent_signals(callback: CallbackQuery):
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    with connect_db() as conn:
+        posts = conn.execute(
+            "SELECT message_id, text, created_at FROM source_posts WHERE created_at>=? ORDER BY created_at DESC",
+            (cutoff,),
+        ).fetchall()
+    counts = {}
+    unknown = []
+    total = 0
+    for message_id, body, created_at in posts:
+        pairs = extract_pairs(body)
+        if not pairs:
+            unknown.append((message_id, created_at))
+            continue
+        for pair in pairs:
+            counts[pair] = counts.get(pair, 0) + 1
+            total += 1
+    lines = ["📊 <b>СТАТИСТИКА ЗА ПОСЛЕДНИЕ 10 МИНУТ</b>", "━━━━━━━━━━━━━━━━━━"]
+    if counts:
+        lines.extend(f"\n💱 <b>{pair}</b> — {count} сигнал(ов)" for pair, count in sorted(counts.items(), key=lambda x: (-x[1], x[0])))
+    else:
+        lines.append("\nСигналов с распознанными парами за этот период нет.")
+    if unknown:
+        lines.append(f"\n❔ Не удалось определить пару — {len(unknown)} сообщ.")
+    lines.append(f"\n\n📨 Всего публикаций: {len(posts)} · распознанных сигналов: {total}")
+    lines.append("\nВремя публикаций (UTC):")
+    for message_id, _, created_at in posts[:10]:
+        lines.append(f"\n• {created_at[11:19]} · пост {message_id}")
+    await callback.message.edit_text(
+        "".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [colored_button("🔄 Обновить", "binary_recent_10", "primary")],
+            [colored_button("⬅️ Назад", "binary_menu", "primary")],
+        ]),
+    )
+    await callback.answer()
+
+
+@user_dp.callback_query(F.data.startswith("pair:"))
+async def binary_pair_history(callback: CallbackQuery):
+    pair = callback.data.split(":", 1)[1]
+    with connect_db() as conn:
+        posts = conn.execute("SELECT message_id, text, created_at FROM source_posts ORDER BY created_at DESC").fetchall()
+    matched = [(mid, body, created) for mid, body, created in posts if pair in extract_pairs(body)][:10]
+    lines = [f"💱 <b>{html.escape(pair)}</b> · последние сигналы", "━━━━━━━━━━━━━━━━━━"]
+    for mid, body, created in matched:
+        excerpt = html.escape((body or "").strip()[:500])
+        lines.append(f"\n{created[11:19]} UTC · пост {mid}\n{excerpt or 'Без текста'}")
+    if not matched:
+        lines.append("\nИстория пары не найдена.")
+    await callback.message.edit_text(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [colored_button("⬅️ К списку пар", "binary_all_pairs", "primary")],
+        ]),
+    )
+    await callback.answer()
+
+
+@user_dp.callback_query(F.data == "binary_menu")
+async def binary_menu(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "⚡ <b>БИНАРНЫЕ ОПЦИОНЫ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+        "Выберите раздел. Отображаются только фактические данные SIGNALS PRO.",
+        reply_markup=binary_menu_keyboard(),
+    )
+    await callback.answer()
 
 
 # =========================================================
@@ -470,17 +728,117 @@ async def options_handler(message: Message):
 async def news_handler(message: Message):
     if not await check_user(message):
         return
+    await fetch_and_store_news()
+    await show_news_page(message, 0)
 
-    await message.answer(
-        "🌐 QUANTUM MARKET NEWS\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "💵 Валютный рынок\n"
-        "₿ Криптовалюты\n"
-        "🏦 Центральные банки\n"
-        "📈 Фондовые рынки\n"
-        "🌍 Мировая экономика\n\n"
-        "🟡 Новостной источник пока не подключён."
+
+def today_news_rows(offset=0):
+    local_midnight = datetime.now(LOCAL_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    utc_midnight = local_midnight.astimezone(timezone.utc).isoformat()
+    with connect_db() as conn:
+        return conn.execute("""
+            SELECT id, title, description, url, image_url, published_at
+            FROM news WHERE published_at>=?
+            ORDER BY published_at DESC LIMIT 6 OFFSET ?
+        """, (utc_midnight, offset)).fetchall()
+
+
+async def show_news_page(target, offset):
+    if not NEWS_REPUBLISH_ALLOWED:
+        text = (
+            "🌐 <b>НОВОСТИ INVESTING.COM</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+            "Лента доступна на официальном сайте. Показ публикаций внутри бота "
+            "включается только после подтверждения прав на хранение и повторное распространение RSS-материалов."
+        )
+        markup = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="↗️ Открыть новости Investing.com", url="https://ru.investing.com/news/", style="primary")],
+            [InlineKeyboardButton(text="ℹ️ Официальные RSS и условия", url="https://www.investing.com/webmaster-tools/rss", style="primary")],
+        ])
+        if isinstance(target, Message):
+            await target.answer(text, reply_markup=markup)
+        else:
+            await target.edit_text(text, reply_markup=markup)
+        return
+    rows = today_news_rows(offset)
+    buttons = []
+    if rows:
+        for row in rows:
+            buttons.append([colored_button("📰 " + row[1][:55], f"news_item:{row[0]}", "primary")])
+        if offset > 0:
+            buttons.append([colored_button("⬅️ Новее", f"news_page:{max(0, offset-6)}", "primary")])
+        if len(rows) == 6:
+            buttons.append([colored_button("Старее ➡️", f"news_page:{offset+6}", "primary")])
+        text = "🌐 <b>НОВОСТИ INVESTING.COM · СЕГОДНЯ</b>\n━━━━━━━━━━━━━━━━━━\n"
+        for row in rows:
+            published = datetime.fromisoformat(row[5]).astimezone(LOCAL_TZ).strftime("%H:%M")
+            text += f"\n<b>{published}</b> · {html.escape(row[1][:100])}\n"
+    else:
+        text = (
+            "🌐 <b>НОВОСТИ INVESTING.COM · СЕГОДНЯ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+            "В сегодняшнем RSS-потоке пока нет публикаций. Нажмите «Обновить», чтобы получить свежую ленту."
+        )
+    buttons.append([colored_button("🔄 Обновить", "news_refresh", "primary")])
+    markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    if isinstance(target, Message):
+        await target.answer(text, reply_markup=markup)
+    else:
+        await target.edit_text(text, reply_markup=markup)
+
+
+@user_dp.callback_query(F.data.startswith("news_page:"))
+async def news_page_callback(callback: CallbackQuery):
+    offset = max(0, int(callback.data.split(":", 1)[1]))
+    await show_news_page(callback, offset)
+    await callback.answer()
+
+
+@user_dp.callback_query(F.data == "news_refresh")
+async def news_refresh_callback(callback: CallbackQuery):
+    await fetch_and_store_news()
+    await show_news_page(callback, 0)
+    await callback.answer(
+        "Лента обновлена" if NEWS_REPUBLISH_ALLOWED else "Откройте официальный сайт Investing.com"
     )
+
+
+@user_dp.callback_query(F.data.startswith("news_item:"))
+async def news_item_callback(callback: CallbackQuery):
+    news_id = int(callback.data.split(":", 1)[1])
+    with connect_db() as conn:
+        item = conn.execute(
+            "SELECT title, description, url, image_url, published_at FROM news WHERE id=?",
+            (news_id,),
+        ).fetchone()
+    if not item:
+        await callback.answer("Новость не найдена.", show_alert=True)
+        return
+    title, description, url, image_url, published_at = item
+    published = datetime.fromisoformat(published_at).astimezone(LOCAL_TZ).strftime("%d.%m.%Y %H:%M") if published_at else "время не указано источником"
+    text = (
+        f"📰 <b>{html.escape(title)}</b>\n\n"
+        f"{html.escape(description or 'Описание в RSS источником не предоставлено.')}\n\n"
+        f"🕒 {published} · Ташкент\n"
+        f"Источник: <a href=\"{html.escape(url, quote=True)}\">Investing.com</a>"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="↗️ Открыть на Investing.com", url=url, style="primary")],
+        [colored_button("⬅️ К сегодняшним новостям", "news_back", "primary")],
+    ])
+    if image_url:
+        try:
+            await callback.message.answer_photo(image_url, caption=text[:1024], reply_markup=keyboard)
+        except TelegramAPIError:
+            log.warning("RSS image could not be delivered for news item %s", news_id)
+            await callback.message.answer(text, reply_markup=keyboard)
+    else:
+        await callback.message.answer(text, reply_markup=keyboard)
+    await callback.answer()
+
+
+@user_dp.callback_query(F.data == "news_back")
+async def news_back_callback(callback: CallbackQuery):
+    await show_news_page(callback, 0)
+    await callback.answer()
 
 
 # =========================================================
@@ -575,16 +933,16 @@ async def history_handler(message: Message):
             body = body[:500] + "…"
         text += (
             f"\n📡 SIGNALS PRO | пост {row[0]}\n"
-            f"{body}\n"
+            f"{html.escape(body)}\n"
             "──────────────\n"
         )
 
     for row in manual_rows:
         text += (
-            f"\n#{row[0]} | {row[1]}\n"
-            f"Направление: {row[2]}\n"
-            f"Таймфрейм: {row[3]}\n"
-            f"Комментарий: {row[4]}\n"
+            f"\n#{row[0]} | {html.escape(row[1] or '')}\n"
+            f"Направление: {html.escape(row[2] or '')}\n"
+            f"Таймфрейм: {html.escape(row[3] or '')}\n"
+            f"Комментарий: {html.escape(row[4] or '')}\n"
             f"Время UTC: {row[5]}\n"
             "──────────────\n"
         )
@@ -604,27 +962,31 @@ async def autotrade_handler(message: Message):
     if not await check_user(message):
         return
 
+    support_button_action = {"url": SUPPORT_URL} if SUPPORT_URL else {"callback_data": "support_admin"}
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="📝 Регистрация в Intrade Bar",
             url="https://go.intrade.bar/n4FmpAFBYfvE",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="📩 Поддержка QUANTUM TRADE AI",
-            callback_data="support_admin",
+            style="primary",
+            **support_button_action,
         )],
     ])
 
     await message.answer(
         "🤖 QUANTUM TRADE AI — АВТОМАТИЧЕСКИЙ БОТ\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "Для подключения автоматического бота необходим "
-        "аккаунт у брокера Intrade Bar.\n\n"
-        "Партнёрский ID: <code>14659</code>.\n\n"
+        "Для подключения автоматической торговли необходим аккаунт Intrade Bar.\n\n"
         "Если у вас ещё нет аккаунта — зарегистрируйтесь "
         "по кнопке ниже.\n\n"
         "Если аккаунт уже есть — нажмите «Поддержка QUANTUM TRADE AI» "
-        "и отправьте администратору сообщение.",
+        "и отправьте администратору сообщение. Поддержка поможет проверить "
+        "возможность подключения и настроить автоматическую торговлю.\n\n"
+        "🔴 Статус подключения: не подключено. API Intrade Bar в проекте не настроен; "
+        "бот не выставляет сделки и не показывает фиктивные результаты.",
         reply_markup=keyboard,
     )
 
@@ -1089,10 +1451,10 @@ async def publish_signal(message: Message, bot: Bot):
     text = (
         "🔔 НОВЫЙ СИГНАЛ QUANTUM TRADE AI\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"📊 Инструмент: {instrument}\n"
+        f"📊 Инструмент: {html.escape(instrument)}\n"
         f"🎯 Направление: {direction}\n"
-        f"⏱ Таймфрейм: {timeframe}\n"
-        f"📝 Комментарий: {details}\n"
+        f"⏱ Таймфрейм: {html.escape(timeframe)}\n"
+        f"📝 Комментарий: {html.escape(details)}\n"
         f"🆔 Сигнал №{signal_id}\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "⚠️ Информационный сигнал. Не является гарантией результата."
@@ -1157,7 +1519,7 @@ async def broadcast(message: Message, bot: Bot):
 
     for (user_id,) in users:
         try:
-            await delivery_bot.send_message(user_id, parts[1])
+            await delivery_bot.send_message(user_id, html.escape(parts[1]))
             sent += 1
             await asyncio.sleep(0.05)
         except TelegramAPIError:
@@ -1362,6 +1724,14 @@ async def admin_buttons(callback: CallbackQuery):
 
     data = callback.data
 
+    if data == "admin_home":
+        await callback.message.edit_text(
+            "🛡 <b>QUANTUM TRADE AI · ПАНЕЛЬ УПРАВЛЕНИЯ</b>\n\nВыберите раздел:",
+            reply_markup=admin_keyboard(),
+        )
+        await callback.answer()
+        return
+
     if data == "admin_stats":
         with connect_db() as conn:
             total = conn.execute(
@@ -1387,14 +1757,21 @@ async def admin_buttons(callback: CallbackQuery):
             f"🟢 Активных: {active}\n"
             f"🔴 Заблокированных: {blocked}\n"
             f"📨 Записей сигналов: {signals}\n"
-            f"📡 Публикаций SIGNALS PRO: {source_posts}"
+            f"📡 Публикаций SIGNALS PRO: {source_posts}",
+            reply_markup=admin_back_keyboard(),
         )
 
     elif data == "admin_users":
-        await callback.message.edit_text(
-            "👥 УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ\n\n"
-            "Используйте команду /users."
-        )
+        with connect_db() as conn:
+            rows = conn.execute("""
+                SELECT user_id, username, full_name, status
+                FROM users ORDER BY created_at DESC LIMIT 20
+            """).fetchall()
+        text = "👥 <b>ПОСЛЕДНИЕ ПОЛЬЗОВАТЕЛИ</b>\n━━━━━━━━━━━━━━━━━━\n"
+        for user_id, username, full_name, status in rows:
+            text += f"\n<code>{user_id}</code> · {html.escape(full_name or '')} · @{html.escape(username or 'нет')} · {status}"
+        text += "\n\nИзменение статуса: /ban ID · /suspend ID · /restore ID"
+        await callback.message.edit_text(text[:4000], reply_markup=admin_back_keyboard())
 
     elif data == "admin_signals":
         with connect_db() as conn:
@@ -1406,7 +1783,7 @@ async def admin_buttons(callback: CallbackQuery):
             """).fetchall()
 
         if not rows:
-            await callback.message.edit_text("Сигналов пока нет.")
+            await callback.message.edit_text("Сигналов пока нет.", reply_markup=admin_back_keyboard())
         else:
             text = "📨 ПОСЛЕДНИЕ СИГНАЛЫ\n━━━━━━━━━━━━━━━━━━\n"
             for row in rows:
@@ -1418,12 +1795,13 @@ async def admin_buttons(callback: CallbackQuery):
                 "\nДля ручной публикации:\n"
                 "/signal BTC/USDT BUY M5 комментарий"
             )
-            await callback.message.edit_text(text[:4000])
+            await callback.message.edit_text(text[:4000], reply_markup=admin_back_keyboard())
 
     elif data == "admin_broadcast":
         await callback.message.edit_text(
             "📢 РАССЫЛКА\n\n"
-            "Формат:\n/broadcast Текст сообщения"
+            "Формат:\n/broadcast Текст сообщения",
+            reply_markup=admin_back_keyboard(),
         )
 
     elif data == "admin_blocks":
@@ -1432,7 +1810,8 @@ async def admin_buttons(callback: CallbackQuery):
             "🔴 /ban ID — блокировка\n"
             "🟢 /unban ID — снять блокировку\n"
             "🔵 /suspend ID — приостановка\n"
-            "🟢 /restore ID — восстановление"
+            "🟢 /restore ID — восстановление",
+            reply_markup=admin_back_keyboard(),
         )
 
     elif data == "admin_manage":
@@ -1447,20 +1826,30 @@ async def admin_buttons(callback: CallbackQuery):
             "🛡 УПРАВЛЕНИЕ АДМИНИСТРАТОРАМИ\n\n"
             "/adminlist — список\n"
             "/addadmin ID — добавить\n"
-            "/removeadmin ID — удалить"
+            "/removeadmin ID — удалить",
+            reply_markup=admin_back_keyboard(),
         )
 
     elif data == "admin_audit":
-        await callback.message.edit_text(
-            "📋 ЖУРНАЛ ДЕЙСТВИЙ\n\nИспользуйте команду /audit."
-        )
+        with connect_db() as conn:
+            rows = conn.execute("""
+                SELECT actor_id, action, target_id, created_at
+                FROM audit ORDER BY id DESC LIMIT 15
+            """).fetchall()
+        text = "📋 <b>ЖУРНАЛ ДЕЙСТВИЙ</b>\n━━━━━━━━━━━━━━━━━━\n"
+        for actor, action, target, created in rows:
+            text += f"\n{created[:19]} · {actor} · {html.escape(action)} · {target or '—'}"
+        if not rows:
+            text += "\nЖурнал пока пуст."
+        await callback.message.edit_text(text[:4000], reply_markup=admin_back_keyboard())
 
     elif data == "admin_settings":
         await callback.message.edit_text(
             "⚙️ НАСТРОЙКИ БОТА\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
             f"📡 Канал SIGNALS PRO:\n{SOURCE_CHANNEL_ID}\n\n"
-            "Бот получает новые публикации канала автоматически."
+            "Бот получает новые публикации канала автоматически.",
+            reply_markup=admin_back_keyboard(),
         )
 
     await callback.answer()
@@ -1493,6 +1882,7 @@ async def main():
         log.info("Пользовательский бот: @%s", user_info.username)
         log.info("Административный бот: @%s", admin_info.username)
         log.info("Источник SIGNALS PRO: %s", SOURCE_CHANNEL_ID)
+        log.info("Investing.com RSS: %s", NEWS_RSS_URL)
 
         # Verify that the USER bot is an administrator of the source channel.
         try:
@@ -1507,7 +1897,12 @@ async def main():
                 "Проверьте ID канала и права пользовательского бота."
             )
 
-        await asyncio.gather(
+        async def news_refresh_worker():
+            while True:
+                await fetch_and_store_news()
+                await asyncio.sleep(NEWS_POLL_SECONDS)
+
+        pollers = [
             user_dp.start_polling(
                 user_bot,
                 allowed_updates=user_dp.resolve_used_update_types(),
@@ -1518,7 +1913,10 @@ async def main():
                 allowed_updates=admin_dp.resolve_used_update_types(),
                 close_bot_session=False,
             ),
-        )
+        ]
+        if NEWS_REPUBLISH_ALLOWED:
+            pollers.append(news_refresh_worker())
+        await asyncio.gather(*pollers)
     except TelegramConflictError:
         log.exception("Polling conflict: another instance is already using one of these bot tokens.")
         raise

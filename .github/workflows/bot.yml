@@ -26,11 +26,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Verify bot behavior
+        run: python -m unittest discover -s tests -v
+
       - name: Check tokens
         env:
           TOKEN_USER: ${{ secrets.TOKEN_USER }}
           TOKEN_ADMIN: ${{ secrets.TOKEN_ADMIN }}
-          OWNER_ID: ${{ secrets.OWNER_ID }}
         run: |
           test -n "$TOKEN_USER"
           test -n "$TOKEN_ADMIN"
@@ -42,5 +44,9 @@ jobs:
           OWNER_ID: ${{ secrets.OWNER_ID }}
           DEFAULT_ADMIN_ID: ${{ secrets.DEFAULT_ADMIN_ID }}
           ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+          NEWS_RSS_URL: ${{ vars.NEWS_RSS_URL }}
+          NEWS_POLL_SECONDS: ${{ vars.NEWS_POLL_SECONDS }}
+          NEWS_REPUBLISH_ALLOWED: ${{ vars.NEWS_REPUBLISH_ALLOWED }}
+          SUPPORT_URL: ${{ vars.SUPPORT_URL }}
           PYTHONUNBUFFERED: "1"
         run: python bot.py
