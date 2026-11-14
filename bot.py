@@ -50,6 +50,12 @@ EXTRA_ADMIN_IDS = {
 
 # Numeric ID of the source Telegram channel SIGNALS PRO.
 SOURCE_CHANNEL_ID = -1003979525371
+CRYPTO_PAIRS = (
+    "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
+    "DOGE/USDT", "ADA/USDT", "TRX/USDT", "TON/USDT", "AVAX/USDT",
+    "DOT/USDT", "LINK/USDT", "LTC/USDT", "BCH/USDT", "ETC/USDT",
+    "XLM/USDT", "NEAR/USDT", "SUI/USDT", "APT/USDT", "FIL/USDT",
+)
 NEWS_RSS_URL = os.getenv("NEWS_RSS_URL", "").strip() or "https://www.investing.com/rss/news.rss"
 NEWS_POLL_SECONDS = max(60, int(os.getenv("NEWS_POLL_SECONDS", "").strip() or "300"))
 NEWS_LIMIT = 100
@@ -593,8 +599,22 @@ async def options_handler(message: Message):
 def binary_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [colored_button("💱 ВСЕ ВАЛЮТНЫЕ ПАРЫ", "binary_all_pairs", "primary")],
+        [colored_button("₿ СПИСОК КРИПТОПАР", "crypto_pairs", "primary")],
         [colored_button("🕘 СИГНАЛЫ ЗА ПОСЛЕДНИЕ 10 МИНУТ", "binary_recent_10", "primary")],
     ])
+
+
+@user_dp.callback_query(F.data == "crypto_pairs")
+async def crypto_pairs_handler(callback: CallbackQuery):
+    lines = ["₿ <b>КРИПТОПАРЫ К USDT</b>", "━━━━━━━━━━━━━━━━━━"]
+    lines.extend(f"{index}. <code>{pair}</code>" for index, pair in enumerate(CRYPTO_PAIRS, 1))
+    await callback.message.edit_text(
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [colored_button("⬅️ К бинарным опционам", "binary_menu", "primary")],
+        ]),
+    )
+    await callback.answer()
 
 
 @user_dp.callback_query(F.data == "binary_all_pairs")
@@ -985,8 +1005,7 @@ async def autotrade_handler(message: Message):
         "Если аккаунт уже есть — нажмите «Поддержка QUANTUM TRADE AI» "
         "и отправьте администратору сообщение. Поддержка поможет проверить "
         "возможность подключения и настроить автоматическую торговлю.\n\n"
-        "🔴 Статус подключения: не подключено. API Intrade Bar в проекте не настроен; "
-        "бот не выставляет сделки и не показывает фиктивные результаты.",
+        "Для подключения и настройки свяжитесь с администратором QUANTUM TRADE AI.",
         reply_markup=keyboard,
     )
 

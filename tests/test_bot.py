@@ -180,12 +180,20 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         text, markup = user_message.answers[0]
         self.assertNotIn("брокер", text.lower())
         self.assertNotIn("14659", text)
-        self.assertIn("API Intrade Bar в проекте не настроен", text)
+        self.assertNotIn("Статус подключения", text)
         registration, support = markup.inline_keyboard[0][0], markup.inline_keyboard[1][0]
         self.assertEqual(registration.style, "primary")
         self.assertEqual(support.style, "primary")
         self.assertEqual(support.callback_data, "support_admin")
         self.assertIsNone(support.url)
+
+    async def test_user_crypto_pair_list_matches_requested_twenty_pairs(self):
+        callback = FakeCallback("crypto_pairs")
+        await bot.crypto_pairs_handler(callback)
+        self.assertEqual(len(bot.CRYPTO_PAIRS), 20)
+        self.assertIn("1. <code>BTC/USDT</code>", callback.message.text)
+        self.assertIn("20. <code>FIL/USDT</code>", callback.message.text)
+        self.assertEqual(callback.message.reply_markup.inline_keyboard[0][0].callback_data, "binary_menu")
 
 
 if __name__ == "__main__":
