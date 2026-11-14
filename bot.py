@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 import os
 import sqlite3
@@ -8,6 +9,9 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     Message,
     CallbackQuery,
@@ -17,7 +21,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     FSInputFile,
 )
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramConflictError, TelegramBadRequest
 
 
 # =========================================================
@@ -27,14 +31,23 @@ from aiogram.exceptions import TelegramAPIError
 TOKEN_USER = os.getenv("TOKEN_USER", "").strip()
 TOKEN_ADMIN = os.getenv("TOKEN_ADMIN", "").strip()
 
-OWNER_ID = 770710937
-DEFAULT_ADMIN_ID = 5232049751
+def env_id(name, fallback):
+    value = os.getenv(name, "").strip()
+    return int(value) if value else fallback
+
+OWNER_ID = env_id("OWNER_ID", 770710937)
+DEFAULT_ADMIN_ID = env_id("DEFAULT_ADMIN_ID", 5232049751)
+EXTRA_ADMIN_IDS = {
+    int(value.strip())
+    for value in os.getenv("ADMIN_IDS", "").split(",")
+    if value.strip().isdigit() and int(value.strip()) > 0
+}
 
 # Numeric ID of the source Telegram channel SIGNALS PRO.
 SOURCE_CHANNEL_ID = -1003979525371
 
 DB_PATH = os.getenv("DB_PATH", "quantum.db")
-INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif")
+INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "FB267F10-57AF-4B85-B2B6-643C9F3EFEE5.gif")
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
 
 logging.basicConfig(
@@ -43,11 +56,15 @@ logging.basicConfig(
 )
 log = logging.getLogger("QUANTUM_TRADE_AI")
 
-user_dp = Dispatcher()
+user_dp = Dispatcher(storage=MemoryStorage())
 admin_dp = Dispatcher()
 
 # Set in main(); admin handlers use this bot to deliver user broadcasts.
 USER_BOT: Bot | None = None
+
+
+class SupportStates(StatesGroup):
+    waiting_for_message = State()
 
 
 # =========================================================
@@ -108,13 +125,28 @@ def init_db():
                 created_at TEXT
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS source_deliveries (
+                source_message_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                copied_message_id INTEGER,
+                PRIMARY KEY (source_message_id, user_id)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS admin_actions (
+                action_key TEXT PRIMARY KEY,
+                created_at TEXT
+            )
+        """)
         columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "signals_consent" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN signals_consent INTEGER DEFAULT -1")
-        conn.execute(
-            "INSERT OR IGNORE INTO admins (user_id) VALUES (?)",
-            (DEFAULT_ADMIN_ID,),
-        )
+        if "intro_sent" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN intro_sent INTEGER DEFAULT 0")
+        for admin_id in {OWNER_ID, DEFAULT_ADMIN_ID, *EXTRA_ADMIN_IDS}:
+            if admin_id > 0:
+                conn.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (admin_id,))
 
 
 def register_user(user):
@@ -167,7 +199,7 @@ def set_status(user_id, status):
 
 
 def is_admin(user_id):
-    if user_id == OWNER_ID:
+    if user_id == OWNER_ID or user_id in EXTRA_ADMIN_IDS:
         return True
     with connect_db() as conn:
         result = conn.execute(
@@ -261,7 +293,11 @@ async def check_admin(message):
     if not message.from_user:
         return False
     if not is_admin(message.from_user.id):
-        await message.answer("⛔ Нет прав администратора.")
+        await message.answer(
+            "⛔ Нет прав администратора.\n"
+            f"Ваш Telegram ID: <code>{message.from_user.id}</code>\n"
+            "Передайте его владельцу для добавления в настройки бота."
+        )
         return False
     return True
 
@@ -306,23 +342,12 @@ async def start_handler(message: Message):
     if not await check_user(message):
         return
 
-    # First message: animated intro, without caption.
-    try:
-        if INTRO_GIF_FILE_ID:
-            await message.answer_animation(INTRO_GIF_FILE_ID)
-        elif os.path.isfile(INTRO_GIF_PATH):
-            await message.answer_animation(FSInputFile(INTRO_GIF_PATH))
-        else:
-            log.warning("Intro GIF not found: %s", INTRO_GIF_PATH)
-    except TelegramAPIError:
-        log.exception("Could not send intro GIF")
-
     welcome_text = (
-        "⚡ <b>QUANTUM TRADE AI</b>\\n\\n"
-        "<b>Добро пожаловать в мир интеллектуальной торговли!</b> ✨\\n\\n"
+        "⚡ <b>QUANTUM TRADE AI</b>\n\n"
+        "<b>Добро пожаловать в мир интеллектуальной торговли!</b> ✨\n\n"
         "Мы анализируем рынок за вас, используя современные алгоритмы "
         "искусственного интеллекта, чтобы помочь вам принимать более "
-        "взвешенные торговые решения.\\n\\n"
+        "взвешенные торговые решения.\n\n"
         "📊 <b>Хотите получать торговые сигналы и следить за "
         "возможностями рынка вместе с QUANTUM TRADE AI?</b>"
     )
@@ -331,14 +356,29 @@ async def start_handler(message: Message):
     consent = user[7] if user and len(user) > 7 else -1
 
     if consent in (0, 1):
-        await message.answer(welcome_text)
-        status = (
-            "🟢 <b>Получение сигналов включено.</b>"
-            if consent == 1
-            else "🔴 <b>Получение сигналов отключено.</b>"
+        signal_status = "🟢 Сигналы включены.\n\n" if consent == 1 else "🔴 Сигналы выключены.\n\n"
+        await message.answer(
+            "💠 <b>QUANTUM TRADE AI</b>\n" + signal_status + "Выберите нужный раздел:",
+            reply_markup=main_keyboard,
         )
-        await message.answer(status, reply_markup=main_keyboard)
         return
+
+    if user and len(user) > 8 and not user[8]:
+        with connect_db() as conn:
+            claimed = conn.execute(
+                "UPDATE users SET intro_sent=1 WHERE user_id=? AND intro_sent=0",
+                (message.from_user.id,),
+            ).rowcount
+        if claimed:
+            try:
+                if INTRO_GIF_FILE_ID:
+                    await message.answer_animation(INTRO_GIF_FILE_ID)
+                elif os.path.isfile(INTRO_GIF_PATH):
+                    await message.answer_animation(FSInputFile(INTRO_GIF_PATH))
+                else:
+                    log.info("Intro GIF is not configured; continuing without it.")
+            except TelegramAPIError:
+                log.exception("Could not send intro GIF")
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [colored_button("🟢 ✅ ПРИНЯТЬ", "signals_accept", "success")],
@@ -367,10 +407,10 @@ async def signal_consent_handler(callback: CallbackQuery):
         if accepted else
         "🔴 <b>СИГНАЛЫ ОТКЛЮЧЕНЫ</b>\nСигналы отправляться не будут."
     )
-    await callback.message.edit_text(status)
+    await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer("Выбор сохранён")
     await callback.message.answer(
-        "💠 <b>Главное меню QUANTUM TRADE AI</b>",
+        status + "\n\n💠 <b>Главное меню QUANTUM TRADE AI</b>",
         reply_markup=main_keyboard,
     )
 
@@ -570,8 +610,8 @@ async def autotrade_handler(message: Message):
             url="https://go.intrade.bar/n4FmpAFBYfvE",
         )],
         [InlineKeyboardButton(
-            text="📩 Поддержка админа",
-            url=f"tg://user?id={OWNER_ID}",
+            text="📩 Поддержка QUANTUM TRADE AI",
+            callback_data="support_admin",
         )],
     ])
 
@@ -580,14 +620,54 @@ async def autotrade_handler(message: Message):
         "━━━━━━━━━━━━━━━━━━\n\n"
         "Для подключения автоматического бота необходим "
         "аккаунт у брокера Intrade Bar.\n\n"
+        "Партнёрский ID: <code>14659</code>.\n\n"
         "Если у вас ещё нет аккаунта — зарегистрируйтесь "
         "по кнопке ниже.\n\n"
-        "Если аккаунт уже есть — напишите администратору QUANTUM TRADE AI "
-        "и уточните условия подключения к партнёрской программе.\n\n"
-        "После этого обратитесь к администратору "
-        "QUANTUM TRADE AI за инструкцией.",
+        "Если аккаунт уже есть — нажмите «Поддержка QUANTUM TRADE AI» "
+        "и отправьте администратору сообщение.",
         reply_markup=keyboard,
     )
+
+
+@user_dp.callback_query(F.data == "support_admin")
+async def support_admin_start(callback: CallbackQuery, state: FSMContext):
+    user = get_user(callback.from_user.id)
+    if not user or user[3] != "active":
+        await callback.answer("Доступ ограничен.", show_alert=True)
+        return
+    await state.set_state(SupportStates.waiting_for_message)
+    await callback.answer()
+    await callback.message.answer("Напишите одним сообщением, с чем нужна помощь. Для отмены: /cancel")
+
+
+@user_dp.message(Command("cancel"), SupportStates.waiting_for_message)
+async def support_admin_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Обращение отменено.", reply_markup=main_keyboard)
+
+
+@user_dp.message(SupportStates.waiting_for_message)
+async def support_admin_message(message: Message, state: FSMContext, bot: Bot):
+    if not message.from_user or not message.text:
+        await message.answer("Отправьте текст или /cancel для отмены.")
+        return
+    await state.clear()
+    user = message.from_user
+    text = (
+        "📩 <b>Обращение пользователя</b>\n"
+        f"ID: <code>{user.id}</code>\n"
+        f"Имя: {html.escape(user.full_name or '')}\n"
+        f"Username: @{html.escape(user.username or 'нет')}\n\n"
+        f"{html.escape(message.text[:3500])}\n\n"
+        f"Ответ: <code>/reply {user.id} текст</code>"
+    )
+    try:
+        await bot.send_message(OWNER_ID, text)
+    except TelegramAPIError:
+        log.exception("Could not deliver support request from user %s", user.id)
+        await message.answer("Не удалось передать обращение. Попробуйте позже.", reply_markup=main_keyboard)
+        return
+    await message.answer("✅ Обращение передано администратору.", reply_markup=main_keyboard)
 
 
 # =========================================================
@@ -742,32 +822,38 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                 0,
             ))
     except sqlite3.IntegrityError:
-        log.info(
-            "SIGNALS PRO post %s was already processed; skipping.",
-            message.message_id,
-        )
-        return
+        log.info("SIGNALS PRO post %s already exists; checking for pending deliveries.", message.message_id)
     except sqlite3.Error:
         log.exception("Could not save SIGNALS PRO post.")
         return
 
     with connect_db() as conn:
         recipients = conn.execute("""
-            SELECT user_id
-            FROM users
-            WHERE status='active' AND notifications=1 AND signals_consent=1
-        """).fetchall()
+            SELECT u.user_id
+            FROM users AS u
+            WHERE u.status='active' AND u.notifications=1 AND u.signals_consent=1
+              AND NOT EXISTS (
+                SELECT 1 FROM source_deliveries AS d
+                WHERE d.source_message_id=? AND d.user_id=u.user_id
+              )
+        """, (message.message_id,)).fetchall()
 
     sent = 0
     failed = 0
 
     for (user_id,) in recipients:
         try:
-            await bot.copy_message(
+            copied = await bot.copy_message(
                 chat_id=user_id,
                 from_chat_id=SOURCE_CHANNEL_ID,
                 message_id=message.message_id,
             )
+            with connect_db() as conn:
+                conn.execute(
+                    "INSERT OR IGNORE INTO source_deliveries "
+                    "(source_message_id, user_id, copied_message_id) VALUES (?, ?, ?)",
+                    (message.message_id, user_id, copied.message_id),
+                )
             sent += 1
             await asyncio.sleep(0.05)
         except TelegramAPIError as error:
@@ -786,6 +872,38 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
     )
 
 
+@user_dp.edited_channel_post(F.chat.id == SOURCE_CHANNEL_ID)
+async def signals_pro_edited_handler(message: Message, bot: Bot):
+    source_text = message.text or message.caption or ""
+    with connect_db() as conn:
+        conn.execute("UPDATE source_posts SET text=? WHERE message_id=?", (source_text, message.message_id))
+        deliveries = conn.execute(
+            "SELECT user_id, copied_message_id FROM source_deliveries WHERE source_message_id=?",
+            (message.message_id,),
+        ).fetchall()
+    updated = 0
+    for user_id, copied_id in deliveries:
+        try:
+            if message.text:
+                await bot.edit_message_text(
+                    chat_id=user_id, message_id=copied_id, text=message.html_text,
+                    parse_mode=ParseMode.HTML,
+                )
+            elif message.caption is not None:
+                await bot.edit_message_caption(
+                    chat_id=user_id, message_id=copied_id, caption=message.html_caption,
+                    parse_mode=ParseMode.HTML,
+                )
+            updated += 1
+            await asyncio.sleep(0.05)
+        except TelegramBadRequest as error:
+            if "message is not modified" not in str(error).lower():
+                log.warning("Could not edit forwarded post for %s: %s", user_id, error)
+        except TelegramAPIError:
+            log.exception("Could not update forwarded post for user %s", user_id)
+    log.info("SIGNALS PRO edit %s synchronized for %s users", message.message_id, updated)
+
+
 # =========================================================
 # ADMIN BOT — PANEL
 # =========================================================
@@ -801,6 +919,14 @@ async def admin_start(message: Message):
         "━━━━━━━━━━━━━━━━━━\n\n"
         "Выберите нужный раздел:",
         reply_markup=admin_keyboard(),
+    )
+
+
+@admin_dp.message(Command("myid"))
+async def my_id(message: Message):
+    await message.answer(
+        f"Ваш Telegram ID: <code>{message.from_user.id}</code>\n"
+        "Укажите его в GitHub Secret OWNER_ID или ADMIN_IDS."
     )
 
 
@@ -928,6 +1054,17 @@ async def publish_signal(message: Message, bot: Bot):
         )
         return
 
+    if USER_BOT is None:
+        await message.answer("⛔ Пользовательский бот не запущен. Сигнал не отправлен.")
+        return
+    action_key = f"signal:{message.chat.id}:{message.message_id}"
+    with connect_db() as conn:
+        try:
+            conn.execute("INSERT INTO admin_actions (action_key, created_at) VALUES (?, ?)", (action_key, now()))
+        except sqlite3.IntegrityError:
+            await message.answer("Эта команда уже обработана; повторная рассылка отменена.")
+            return
+
     with connect_db() as conn:
         cursor = conn.execute("""
             INSERT INTO signals
@@ -966,7 +1103,7 @@ async def publish_signal(message: Message, bot: Bot):
 
     for (user_id,) in recipients:
         try:
-            await bot.send_message(user_id, text)
+            await USER_BOT.send_message(user_id, text)
             sent += 1
             await asyncio.sleep(0.05)
         except TelegramAPIError:
@@ -994,6 +1131,14 @@ async def broadcast(message: Message, bot: Bot):
     if len(parts) < 2:
         await message.answer("Формат:\n/broadcast Текст сообщения")
         return
+
+    action_key = f"broadcast:{message.chat.id}:{message.message_id}"
+    with connect_db() as conn:
+        try:
+            conn.execute("INSERT INTO admin_actions (action_key, created_at) VALUES (?, ?)", (action_key, now()))
+        except sqlite3.IntegrityError:
+            await message.answer("Эта рассылка уже обработана; повторная отправка отменена.")
+            return
 
     with connect_db() as conn:
         users = conn.execute("""
@@ -1025,6 +1170,30 @@ async def broadcast(message: Message, bot: Bot):
         f"Отправлено: {sent}\n"
         f"Ошибок: {failed}"
     )
+
+
+@admin_dp.message(Command("reply"))
+async def admin_reply(message: Message):
+    if not await check_admin(message):
+        return
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].isdigit():
+        await message.answer("Формат: /reply ID текст ответа")
+        return
+    if USER_BOT is None:
+        await message.answer("Пользовательский бот не подключён.")
+        return
+    target_id = int(parts[1])
+    try:
+        await USER_BOT.send_message(
+            target_id,
+            "📩 <b>Ответ поддержки QUANTUM TRADE AI</b>\n\n" + html.escape(parts[2]),
+        )
+        audit(message.from_user.id, "support_reply", target_id)
+        await message.answer("✅ Ответ отправлен пользователю.")
+    except TelegramAPIError:
+        log.exception("Could not send admin reply to user %s", target_id)
+        await message.answer("Не удалось доставить ответ. Пользователь мог заблокировать бота.")
 
 
 # =========================================================
@@ -1211,7 +1380,7 @@ async def admin_buttons(callback: CallbackQuery):
                 "SELECT COUNT(*) FROM source_posts"
             ).fetchone()[0]
 
-        await callback.message.answer(
+        await callback.message.edit_text(
             "📊 СТАТИСТИКА QUANTUM TRADE AI\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
             f"👥 Пользователей: {total}\n"
@@ -1222,7 +1391,7 @@ async def admin_buttons(callback: CallbackQuery):
         )
 
     elif data == "admin_users":
-        await callback.message.answer(
+        await callback.message.edit_text(
             "👥 УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ\n\n"
             "Используйте команду /users."
         )
@@ -1237,7 +1406,7 @@ async def admin_buttons(callback: CallbackQuery):
             """).fetchall()
 
         if not rows:
-            await callback.message.answer("Сигналов пока нет.")
+            await callback.message.edit_text("Сигналов пока нет.")
         else:
             text = "📨 ПОСЛЕДНИЕ СИГНАЛЫ\n━━━━━━━━━━━━━━━━━━\n"
             for row in rows:
@@ -1249,16 +1418,16 @@ async def admin_buttons(callback: CallbackQuery):
                 "\nДля ручной публикации:\n"
                 "/signal BTC/USDT BUY M5 комментарий"
             )
-            await callback.message.answer(text[:4000])
+            await callback.message.edit_text(text[:4000])
 
     elif data == "admin_broadcast":
-        await callback.message.answer(
+        await callback.message.edit_text(
             "📢 РАССЫЛКА\n\n"
             "Формат:\n/broadcast Текст сообщения"
         )
 
     elif data == "admin_blocks":
-        await callback.message.answer(
+        await callback.message.edit_text(
             "🚫 УПРАВЛЕНИЕ ДОСТУПОМ\n\n"
             "🔴 /ban ID — блокировка\n"
             "🟢 /unban ID — снять блокировку\n"
@@ -1274,7 +1443,7 @@ async def admin_buttons(callback: CallbackQuery):
             )
             return
 
-        await callback.message.answer(
+        await callback.message.edit_text(
             "🛡 УПРАВЛЕНИЕ АДМИНИСТРАТОРАМИ\n\n"
             "/adminlist — список\n"
             "/addadmin ID — добавить\n"
@@ -1282,12 +1451,12 @@ async def admin_buttons(callback: CallbackQuery):
         )
 
     elif data == "admin_audit":
-        await callback.message.answer(
+        await callback.message.edit_text(
             "📋 ЖУРНАЛ ДЕЙСТВИЙ\n\nИспользуйте команду /audit."
         )
 
     elif data == "admin_settings":
-        await callback.message.answer(
+        await callback.message.edit_text(
             "⚙️ НАСТРОЙКИ БОТА\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
             f"📡 Канал SIGNALS PRO:\n{SOURCE_CHANNEL_ID}\n\n"
@@ -1339,9 +1508,23 @@ async def main():
             )
 
         await asyncio.gather(
-            user_dp.start_polling(user_bot),
-            admin_dp.start_polling(admin_bot),
+            user_dp.start_polling(
+                user_bot,
+                allowed_updates=user_dp.resolve_used_update_types(),
+                close_bot_session=False,
+            ),
+            admin_dp.start_polling(
+                admin_bot,
+                allowed_updates=admin_dp.resolve_used_update_types(),
+                close_bot_session=False,
+            ),
         )
+    except TelegramConflictError:
+        log.exception("Polling conflict: another instance is already using one of these bot tokens.")
+        raise
+    except Exception:
+        log.exception("Fatal bot runtime error")
+        raise
 
     finally:
         await user_bot.session.close()
