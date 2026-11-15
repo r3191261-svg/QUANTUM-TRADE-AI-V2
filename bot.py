@@ -962,7 +962,7 @@ async def history_handler(message: Message):
         if len(body) > 500:
             body = body[:500] + "…"
         text += (
-            f"\n📡 SIGNALS PRO | пост {row[0]}\n"
+            "\n"
             f"{html.escape(body)}\n"
             "──────────────\n"
         )
