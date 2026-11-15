@@ -183,11 +183,14 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Статус подключения", text)
         registration, support = markup.inline_keyboard[0][0], markup.inline_keyboard[1][0]
         self.assertEqual(registration.style, "primary")
-        self.assertEqual(support.style, "primary")
+        self.assertEqual(support.style, "success")
         self.assertIsNone(support.callback_data)
         self.assertEqual(registration.text, "📝 Регистрация у брокера")
         self.assertEqual(support.text, "🤖 Подключить автоторговлю")
-        self.assertEqual(support.url, "https://t.me/copy_broker_BO_bot")
+        self.assertEqual(support.url, bot.SUPPORT_URL)
+        self.assertIn("text=", support.url)
+        self.assertEqual(bot.SUPPORT_MESSAGE, "Здравствуйте! 🤝 Хочу подключить автоторговлю!")
+        self.assertIn(bot.SUPPORT_MESSAGE, text)
         self.assertNotIn("отправьте администратору сообщение", text.lower())
 
     async def test_binary_menu_hides_crypto_list_and_exposes_binary_signals(self):

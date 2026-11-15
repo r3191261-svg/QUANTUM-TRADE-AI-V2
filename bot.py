@@ -6,6 +6,7 @@ import re
 import sqlite3
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
+from urllib.parse import quote
 
 import aiohttp
 import feedparser
@@ -58,7 +59,8 @@ NEWS_RSS_URL = os.getenv("NEWS_RSS_URL", "").strip() or "https://www.investing.c
 NEWS_POLL_SECONDS = max(60, int(os.getenv("NEWS_POLL_SECONDS", "").strip() or "300"))
 NEWS_LIMIT = 100
 NEWS_REPUBLISH_ALLOWED = os.getenv("NEWS_REPUBLISH_ALLOWED", "false").strip().lower() == "true"
-SUPPORT_URL = "https://t.me/copy_broker_BO_bot"
+SUPPORT_MESSAGE = "Здравствуйте! 🤝 Хочу подключить автоторговлю!"
+SUPPORT_URL = f"https://t.me/copy_broker_BO_bot?text={quote(SUPPORT_MESSAGE)}"
 LOCAL_TZ = timezone(timedelta(hours=5), "Asia/Tashkent")
 
 # ISO 4217 currency codes plus commonly quoted crypto tickers. Signals are
@@ -998,7 +1000,7 @@ async def autotrade_handler(message: Message):
         )],
         [InlineKeyboardButton(
             text="🤖 Подключить автоторговлю",
-            style="primary",
+            style="success",
             url=SUPPORT_URL,
         )],
     ])
@@ -1007,6 +1009,8 @@ async def autotrade_handler(message: Message):
         "🤖 QUANTUM TRADE AI — АВТОМАТИЧЕСКИЙ БОТ\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "Для подключения автоматической торговли необходим аккаунт Intrade Bar.\n\n"
+        "При переходе в поддержку откроется готовое сообщение:\n"
+        f"<b>{html.escape(SUPPORT_MESSAGE)}</b>\n\n"
         "Выберите действие: зарегистрируйтесь у брокера или откройте чат "
         "поддержки, чтобы уточнить условия подключения автоторговли.",
         reply_markup=keyboard,
