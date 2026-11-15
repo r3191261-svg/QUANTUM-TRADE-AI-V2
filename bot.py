@@ -608,7 +608,7 @@ async def options_handler(message: Message):
 
     await message.answer(
         "📈 <b>СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
-        "Выберите нужный раздел. Данные строятся только по публикациям SIGNALS PRO.",
+        "Выберите нужный раздел.",
         reply_markup=binary_menu_keyboard(),
     )
 
@@ -750,7 +750,7 @@ async def binary_pair_history(callback: CallbackQuery):
 async def binary_menu(callback: CallbackQuery):
     await callback.message.edit_text(
         "📈 <b>СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
-        "Выберите раздел. Отображаются только фактические данные SIGNALS PRO.",
+        "Выберите раздел.",
         reply_markup=binary_menu_keyboard(),
     )
     await callback.answer()
