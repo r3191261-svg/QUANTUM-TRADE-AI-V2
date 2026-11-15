@@ -47,7 +47,7 @@ EXTRA_ADMIN_IDS = {
     if value.strip().isdigit() and int(value.strip()) > 0
 }
 
-# Numeric ID of the source Telegram channel SIGNALS PRO.
+# Numeric ID of the source Telegram channel.
 SOURCE_CHANNEL_ID = -1003979525371
 CRYPTO_PAIRS = (
     "BTC/USDT", "ETH/USDT", "BNB/USDT", "SOL/USDT", "XRP/USDT",
@@ -648,7 +648,7 @@ async def show_pair_page(callback: CallbackQuery, offset):
             pairs.setdefault(pair, {"count": 0, "last_id": message_id})["count"] += 1
     if not pairs:
         await callback.message.edit_text(
-            "💱 <b>ВАЛЮТНЫЕ ПАРЫ SIGNALS PRO</b>\n\n"
+            "💱 <b>ВАЛЮТНЫЕ ПАРЫ</b>\n\n"
             "В сохранённых публикациях пока не найдено сигналов с распознанными валютными парами.",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [colored_button("⬅️ Назад", "binary_menu", "primary")]
@@ -658,7 +658,7 @@ async def show_pair_page(callback: CallbackQuery, offset):
     ordered = sorted(pairs.items(), key=lambda item: (-item[1]["count"], item[0]))
     page_size = 20
     page = ordered[offset:offset + page_size]
-    lines = [f"💱 <b>ВАЛЮТНЫЕ ПАРЫ SIGNALS PRO</b> · {offset+1}–{offset+len(page)} из {len(ordered)}", "━━━━━━━━━━━━━━━━━━"]
+    lines = [f"💱 <b>ВАЛЮТНЫЕ ПАРЫ</b> · {offset+1}–{offset+len(page)} из {len(ordered)}", "━━━━━━━━━━━━━━━━━━"]
     buttons = []
     for pair, values in page:
         lines.append(f"\n<b>{pair}</b> — {values['count']} сигнал(ов)")
@@ -696,10 +696,10 @@ async def binary_recent_signals(callback: CallbackQuery):
     counts = {}
     unknown = []
     total = 0
-    for message_id, body, created_at in posts:
+    for _, body, created_at in posts:
         pairs = extract_pairs(body)
         if not pairs:
-            unknown.append((message_id, created_at))
+            unknown.append(created_at)
             continue
         for pair in pairs:
             counts[pair] = counts.get(pair, 0) + 1
@@ -711,10 +711,10 @@ async def binary_recent_signals(callback: CallbackQuery):
         lines.append("\nСигналов с распознанными парами за этот период нет.")
     if unknown:
         lines.append(f"\n❔ Не удалось определить пару — {len(unknown)} сообщ.")
-    lines.append(f"\n\n📨 Всего публикаций: {len(posts)} · распознанных сигналов: {total}")
-    lines.append("\nВремя публикаций (UTC):")
-    for message_id, _, created_at in posts[:10]:
-        lines.append(f"\n• {created_at[11:19]} · пост {message_id}")
+    lines.append(f"\n\n📨 Распознанных сигналов: {total}")
+    lines.append("\nВремя сигналов (UTC):")
+    for _, _, created_at in posts[:10]:
+        lines.append(f"\n• {created_at[11:19]} UTC")
     await callback.message.edit_text(
         "".join(lines),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
@@ -730,11 +730,11 @@ async def binary_pair_history(callback: CallbackQuery):
     pair = callback.data.split(":", 1)[1]
     with connect_db() as conn:
         posts = conn.execute("SELECT message_id, text, created_at FROM source_posts ORDER BY created_at DESC").fetchall()
-    matched = [(mid, body, created) for mid, body, created in posts if pair in extract_pairs(body)][:10]
+    matched = [(body, created) for _, body, created in posts if pair in extract_pairs(body)][:10]
     lines = [f"💱 <b>{html.escape(pair)}</b> · последние сигналы", "━━━━━━━━━━━━━━━━━━"]
-    for mid, body, created in matched:
+    for body, created in matched:
         excerpt = html.escape((body or "").strip()[:500])
-        lines.append(f"\n{created[11:19]} UTC · пост {mid}\n{excerpt or 'Без текста'}")
+        lines.append(f"\n{created[11:19]} UTC\n{excerpt or 'Без текста'}")
     if not matched:
         lines.append("\nИстория пары не найдена.")
     await callback.message.edit_text(
@@ -1175,13 +1175,13 @@ async def profile_callback(callback: CallbackQuery):
 
 
 # =========================================================
-# SIGNALS PRO CHANNEL AUTO-FORWARDING
+# SOURCE CHANNEL AUTO-FORWARDING
 # =========================================================
 
 @user_dp.channel_post(F.chat.id == SOURCE_CHANNEL_ID)
 async def signals_pro_channel_handler(message: Message, bot: Bot):
     """
-    Copies each new channel post from SIGNALS PRO to active users
+    Copies each new source-channel post to active users
     who have started the user bot and enabled notifications.
 
     Original post formatting/media are retained by copy_message.
@@ -1201,17 +1201,17 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                 (instrument, direction, timeframe, details, created_at, created_by)
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (
-                "SIGNALS PRO",
-                "CHANNEL POST",
+                "Публикация",
+                "Источник",
                 "-",
                 post_text[:3000],
                 posted_at,
                 0,
             ))
     except sqlite3.IntegrityError:
-        log.info("SIGNALS PRO post %s already exists; checking for pending deliveries.", message.message_id)
+        log.info("Source entry already exists; checking for pending deliveries.")
     except sqlite3.Error:
-        log.exception("Could not save SIGNALS PRO post.")
+        log.exception("Could not save source-channel entry.")
         return
 
     with connect_db() as conn:
@@ -1253,8 +1253,7 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
             )
 
     log.info(
-        "SIGNALS PRO post %s processed. Delivered=%s Failed=%s",
-        message.message_id,
+        "Source entry processed. Delivered=%s Failed=%s",
         sent,
         failed,
     )
@@ -1292,7 +1291,7 @@ async def signals_pro_edited_handler(message: Message, bot: Bot):
                 log.warning("Could not edit forwarded post for %s: %s", user_id, error)
         except TelegramAPIError:
             log.exception("Could not update forwarded post for user %s", user_id)
-    log.info("SIGNALS PRO edit %s synchronized for %s users", message.message_id, updated)
+    log.info("Source entry edit synchronized for %s users", updated)
 
 
 # =========================================================
@@ -1367,18 +1366,13 @@ async def admin_stats(message: Message):
         signals = conn.execute(
             "SELECT COUNT(*) FROM signals"
         ).fetchone()[0]
-        channel_posts = conn.execute(
-            "SELECT COUNT(*) FROM source_posts"
-        ).fetchone()[0]
-
     await message.answer(
         "📊 СТАТИСТИКА ПЛАТФОРМЫ\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         f"👥 Всего пользователей: {total}\n"
         f"🟢 Активных: {active}\n"
         f"🔴 Заблокированных: {blocked}\n"
-        f"📨 Записей сигналов: {signals}\n"
-        f"📡 Публикаций SIGNALS PRO: {channel_posts}"
+        f"📨 Записей сигналов: {signals}"
     )
 
 
@@ -1775,18 +1769,13 @@ async def admin_buttons(callback: CallbackQuery):
             signals = conn.execute(
                 "SELECT COUNT(*) FROM signals"
             ).fetchone()[0]
-            source_posts = conn.execute(
-                "SELECT COUNT(*) FROM source_posts"
-            ).fetchone()[0]
-
         await callback.message.edit_text(
             "📊 СТАТИСТИКА QUANTUM TRADE AI\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
             f"👥 Пользователей: {total}\n"
             f"🟢 Активных: {active}\n"
             f"🔴 Заблокированных: {blocked}\n"
-            f"📨 Записей сигналов: {signals}\n"
-            f"📡 Публикаций SIGNALS PRO: {source_posts}",
+            f"📨 Записей сигналов: {signals}",
             reply_markup=admin_back_keyboard(),
         )
 
@@ -1816,8 +1805,11 @@ async def admin_buttons(callback: CallbackQuery):
         else:
             text = "📨 ПОСЛЕДНИЕ СИГНАЛЫ\n━━━━━━━━━━━━━━━━━━\n"
             for row in rows:
+                is_source_post = row[2] in ("CHANNEL POST", "Источник")
+                instrument = "Публикация" if is_source_post else row[1]
+                direction = "Источник" if is_source_post else row[2]
                 text += (
-                    f"\n#{row[0]} {row[1]} {row[2]} {row[3]}\n"
+                    f"\n#{row[0]} {instrument} {direction} {row[3]}\n"
                     f"{row[4]}\n"
                 )
             text += (
@@ -1876,8 +1868,7 @@ async def admin_buttons(callback: CallbackQuery):
         await callback.message.edit_text(
             "⚙️ НАСТРОЙКИ БОТА\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
-            f"📡 Канал SIGNALS PRO:\n{SOURCE_CHANNEL_ID}\n\n"
-            "Бот получает новые публикации канала автоматически.",
+            "📡 Автоматическая обработка публикаций включена.",
             reply_markup=admin_back_keyboard(),
         )
 
@@ -1910,7 +1901,7 @@ async def main():
 
         log.info("Пользовательский бот: @%s", user_info.username)
         log.info("Административный бот: @%s", admin_info.username)
-        log.info("Источник SIGNALS PRO: %s", SOURCE_CHANNEL_ID)
+        log.info("Источник канала: %s", SOURCE_CHANNEL_ID)
         log.info("Investing.com RSS: %s", NEWS_RSS_URL)
 
         # Verify that the USER bot is an administrator of the source channel.
@@ -1922,7 +1913,7 @@ async def main():
             log.info("Статус пользовательского бота в канале: %s", member.status)
         except TelegramAPIError:
             log.exception(
-                "Не удалось проверить доступ к SIGNALS PRO. "
+                "Не удалось проверить доступ к каналу публикаций. "
                 "Проверьте ID канала и права пользовательского бота."
             )
 
