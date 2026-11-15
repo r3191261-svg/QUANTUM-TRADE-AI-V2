@@ -185,8 +185,15 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registration.style, "primary")
         self.assertEqual(support.style, "primary")
         self.assertIsNone(support.callback_data)
+        self.assertEqual(registration.text, "📝 Регистрация у брокера")
+        self.assertEqual(support.text, "🤖 Подключить автоторговлю")
         self.assertEqual(support.url, "https://t.me/copy_broker_BO_bot")
         self.assertNotIn("отправьте администратору сообщение", text.lower())
+
+    async def test_binary_menu_hides_crypto_list_and_exposes_binary_signals(self):
+        labels = [row[0].text for row in bot.binary_menu_keyboard().inline_keyboard]
+        self.assertNotIn("₿ СПИСОК КРИПТОПАР", labels)
+        self.assertIn("📈 СИГНАЛЫ БИНАРНЫХ ОПЦИОНОВ", labels)
 
     async def test_user_crypto_pair_list_matches_requested_twenty_pairs(self):
         callback = FakeCallback("crypto_pairs")

@@ -345,12 +345,11 @@ async def fetch_and_store_news():
 # KEYBOARDS
 # =========================================================
 
-# New user menu. Old Forex and calendar handlers are retained below,
-# but these two sections are no longer shown in the main keyboard.
+# User menu.
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="⚡ БИНАРНЫЕ ОПЦИОНЫ", style="primary")],
-        [KeyboardButton(text="🌐 НОВОСТИ", style="success")],
+        [KeyboardButton(text="📅 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="success")],
         [
             KeyboardButton(text="📊 СТАТИСТИКА", style="danger"),
             KeyboardButton(text="🕘 ИСТОРИЯ СИГНАЛОВ", style="danger"),
@@ -367,6 +366,21 @@ main_keyboard = ReplyKeyboardMarkup(
 
 def colored_button(text, callback_data, style="primary"):
     return InlineKeyboardButton(text=text, callback_data=callback_data, style=style)
+
+
+def signal_action_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="📝 Регистрация у брокера",
+            url="https://go.intrade.bar/n4FmpAFBYfvE",
+            style="primary",
+        )],
+        [InlineKeyboardButton(
+            text="🤖 Подключить автоторговлю",
+            url=SUPPORT_URL,
+            style="success",
+        )],
+    ])
 
 
 def settings_keyboard(enabled):
@@ -593,8 +607,7 @@ async def options_handler(message: Message):
 def binary_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [colored_button("💱 ВСЕ ВАЛЮТНЫЕ ПАРЫ", "binary_all_pairs", "primary")],
-        [colored_button("₿ СПИСОК КРИПТОПАР", "crypto_pairs", "primary")],
-        [colored_button("🕘 СИГНАЛЫ ЗА ПОСЛЕДНИЕ 10 МИНУТ", "binary_recent_10", "primary")],
+        [colored_button("📈 СИГНАЛЫ БИНАРНЫХ ОПЦИОНОВ", "binary_recent_10", "success")],
     ])
 
 
@@ -859,24 +872,23 @@ async def news_back_callback(callback: CallbackQuery):
 # LEGACY ECONOMIC CALENDAR — KEPT, NOT SHOWN IN NEW MENU
 # =========================================================
 
-@user_dp.message(F.text == "📅 Экономический календарь")
+@user_dp.message(F.text.in_({"📅 Экономический календарь", "📅 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ"}))
 async def calendar_handler(message: Message):
     if not await check_user(message):
         return
 
     await message.answer(
-        "📅 ECONOMIC CALENDAR\n"
+        "📅 <b>ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "🔴 Высокая важность\n"
-        "🟡 Средняя важность\n"
-        "🟢 Низкая важность\n\n"
-        "В календаре будут отображаться:\n"
-        "• Время события\n"
-        "• Страна и валюта\n"
-        "• Название события\n"
-        "• Прогноз\n"
-        "• Фактическое значение\n\n"
-        "🟡 Источник календаря пока не подключён."
+        "Календарь макроэкономических событий: время, страна, важность, "
+        "фактическое значение и прогноз. Откройте официальный календарь по кнопке ниже.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="📅 Открыть экономический календарь",
+                url="https://ru.investing.com/economic-calendar/",
+                style="primary",
+            )],
+        ]),
     )
 
 
@@ -978,12 +990,12 @@ async def autotrade_handler(message: Message):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="📝 Регистрация в Intrade Bar",
+            text="📝 Регистрация у брокера",
             url="https://go.intrade.bar/n4FmpAFBYfvE",
             style="primary",
         )],
         [InlineKeyboardButton(
-            text="📩 Поддержка",
+            text="🤖 Подключить автоторговлю",
             style="primary",
             url=SUPPORT_URL,
         )],
@@ -993,10 +1005,8 @@ async def autotrade_handler(message: Message):
         "🤖 QUANTUM TRADE AI — АВТОМАТИЧЕСКИЙ БОТ\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "Для подключения автоматической торговли необходим аккаунт Intrade Bar.\n\n"
-        "Если у вас ещё нет аккаунта — зарегистрируйтесь "
-        "по кнопке ниже.\n\n"
-        "Если аккаунт уже есть — нажмите кнопку «Поддержка», чтобы открыть "
-        "Telegram-чат поддержки и уточнить условия подключения.",
+        "Выберите действие: зарегистрируйтесь у брокера или откройте чат "
+        "поддержки, чтобы уточнить условия подключения автоторговли.",
         reply_markup=keyboard,
     )
 
@@ -1178,6 +1188,7 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                 chat_id=user_id,
                 from_chat_id=SOURCE_CHANNEL_ID,
                 message_id=message.message_id,
+                reply_markup=signal_action_keyboard(),
             )
             with connect_db() as conn:
                 conn.execute(
@@ -1218,12 +1229,12 @@ async def signals_pro_edited_handler(message: Message, bot: Bot):
             if message.text:
                 await bot.edit_message_text(
                     chat_id=user_id, message_id=copied_id, text=message.html_text,
-                    parse_mode=ParseMode.HTML,
+                    parse_mode=ParseMode.HTML, reply_markup=signal_action_keyboard(),
                 )
             elif message.caption is not None:
                 await bot.edit_message_caption(
                     chat_id=user_id, message_id=copied_id, caption=message.html_caption,
-                    parse_mode=ParseMode.HTML,
+                    parse_mode=ParseMode.HTML, reply_markup=signal_action_keyboard(),
                 )
             updated += 1
             await asyncio.sleep(0.05)
