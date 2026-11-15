@@ -900,26 +900,44 @@ async def calendar_handler(message: Message):
 # STATISTICS
 # =========================================================
 
+def signal_result_marker(details):
+    result_text = (details or "").upper()
+    if re.search(r"\b(WIN|ВЫИГРЫШ|ПРИБЫЛЬ)\b", result_text):
+        return "✅"
+    if re.search(r"\b(LOSS|ПРОИГРЫШ|УБЫТОК)\b", result_text):
+        return "❌"
+    return "⏳"
+
+
 @user_dp.message(F.text.in_({"📊 СТАТИСТИКА", "📈 Статистика"}))
 async def statistics_handler(message: Message):
     if not await check_user(message):
         return
 
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     with connect_db() as conn:
-        total = conn.execute(
-            "SELECT COUNT(*) FROM signals"
-        ).fetchone()[0]
-        source_total = conn.execute(
-            "SELECT COUNT(*) FROM source_posts"
-        ).fetchone()[0]
+        recent_signals = conn.execute(
+            "SELECT details FROM signals WHERE created_at >= ? ORDER BY created_at DESC",
+            (since,),
+        ).fetchall()
+
+    wins = 0
+    losses = 0
+    for (details,) in recent_signals:
+        marker = signal_result_marker(details)
+        if marker == "✅":
+            wins += 1
+        elif marker == "❌":
+            losses += 1
+    pending = len(recent_signals) - wins - losses
 
     await message.answer(
-        "📊 QUANTUM PERFORMANCE\n"
+        "📊 РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 24 ЧАСА\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"📨 Всего записей сигналов: {total}\n"
-        f"📡 Публикаций из SIGNALS PRO: {source_total}\n\n"
-        "Результаты WIN / LOSS не рассчитываются без "
-        "достоверной фиксации исходов."
+        f"📨 Сигналов за сутки: {len(recent_signals)}\n"
+        f"✅ WIN: {wins}\n"
+        f"❌ LOSS: {losses}\n"
+        f"⏳ Без указанного результата: {pending}"
     )
 
 
@@ -962,14 +980,14 @@ async def history_handler(message: Message):
         if len(body) > 500:
             body = body[:500] + "…"
         text += (
-            "\n"
+            f"\n{signal_result_marker(body)} "
             f"{html.escape(body)}\n"
             "──────────────\n"
         )
 
     for row in manual_rows:
         text += (
-            f"\n#{row[0]} | {html.escape(row[1] or '')}\n"
+            f"\n{signal_result_marker(row[4])} #{row[0]} | {html.escape(row[1] or '')}\n"
             f"Направление: {html.escape(row[2] or '')}\n"
             f"Таймфрейм: {html.escape(row[3] or '')}\n"
             f"Комментарий: {html.escape(row[4] or '')}\n"
