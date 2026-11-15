@@ -178,7 +178,7 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         user_message.from_user = SimpleNamespace(id=777, username="test", full_name="Test User")
         await bot.autotrade_handler(user_message)
         text, markup = user_message.answers[0]
-        self.assertIn("регистрацию у брокера", text.lower())
+        self.assertIn("зарегистрируйтесь у брокера", text.lower())
         self.assertNotIn("14659", text)
         self.assertNotIn("Статус подключения", text)
         registration, support = markup.inline_keyboard[0][0], markup.inline_keyboard[1][0]
