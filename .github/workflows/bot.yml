@@ -16,6 +16,14 @@ jobs:
       - name: Download project
         uses: actions/checkout@v4
 
+      - name: Restore persistent bot database
+        uses: actions/cache/restore@v4
+        with:
+          path: quantum.db
+          key: quantum-db-${{ github.run_id }}
+          restore-keys: |
+            quantum-db-
+
       - name: Install Python
         uses: actions/setup-python@v5
         with:
@@ -49,3 +57,10 @@ jobs:
           NEWS_REPUBLISH_ALLOWED: ${{ vars.NEWS_REPUBLISH_ALLOWED }}
           PYTHONUNBUFFERED: "1"
         run: python bot.py
+
+      - name: Save persistent bot database
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: quantum.db
+          key: quantum-db-${{ github.run_id }}

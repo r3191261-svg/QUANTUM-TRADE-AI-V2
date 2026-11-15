@@ -184,6 +184,11 @@ def init_db():
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_source_posts_created_at ON source_posts(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_news_published_at ON news(published_at)")
+        source_columns = {row[1] for row in conn.execute("PRAGMA table_info(source_posts)").fetchall()}
+        if "updated_at" not in source_columns:
+            conn.execute("ALTER TABLE source_posts ADD COLUMN updated_at TEXT")
+            conn.execute("UPDATE source_posts SET updated_at=created_at WHERE updated_at IS NULL")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_source_posts_updated_at ON source_posts(updated_at)")
         columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "signals_consent" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN signals_consent INTEGER DEFAULT -1")
@@ -902,10 +907,12 @@ async def calendar_handler(message: Message):
 
 def signal_result_marker(details):
     result_text = (details or "").upper()
-    if re.search(r"\b(WIN|ВЫИГРЫШ|ПРИБЫЛЬ)\b", result_text):
-        return "✅"
-    if re.search(r"\b(LOSS|ПРОИГРЫШ|УБЫТОК)\b", result_text):
+    win = re.search(r"\b(WIN|WON|ВЫИГРЫШ|ПРИБЫЛЬ)\b|✅", result_text)
+    loss = re.search(r"\b(LOSS|LOSE|ПРОИГРЫШ|УБЫТОК)\b|❌|✖️", result_text)
+    if loss and (not win or loss.start() > win.start()):
         return "❌"
+    if win:
+        return "✅"
     return "⏳"
 
 
@@ -916,10 +923,17 @@ async def statistics_handler(message: Message):
 
     since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     with connect_db() as conn:
-        recent_signals = conn.execute(
-            "SELECT details FROM signals WHERE created_at >= ? ORDER BY created_at DESC",
+        source_signals = conn.execute(
+            "SELECT text FROM source_posts "
+            "WHERE created_at >= ? OR COALESCE(updated_at, created_at) >= ?",
+            (since, since),
+        ).fetchall()
+        manual_signals = conn.execute(
+            "SELECT details FROM signals "
+            "WHERE (created_by != 0 OR created_by IS NULL) AND created_at >= ?",
             (since,),
         ).fetchall()
+    recent_signals = source_signals + manual_signals
 
     wins = 0
     losses = 0
@@ -979,8 +993,15 @@ async def history_handler(message: Message):
         body = (row[1] or "[Публикация без текста]").strip()
         if len(body) > 500:
             body = body[:500] + "…"
+        created_at = row[2]
+        try:
+            signal_time = datetime.fromisoformat(created_at).astimezone(
+                timezone(timedelta(hours=5))
+            ).strftime("%d.%m %H:%M")
+        except (TypeError, ValueError):
+            signal_time = created_at or "время не указано"
         text += (
-            f"\n{signal_result_marker(body)} "
+            f"\n{signal_result_marker(body)} {signal_time} · "
             f"{html.escape(body)}\n"
             "──────────────\n"
         )
@@ -1166,14 +1187,15 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
     Original post formatting/media are retained by copy_message.
     """
     post_text = message.text or message.caption or ""
+    posted_at = now()
 
     # Atomic insert protects against duplicate processing of the same post.
     try:
         with connect_db() as conn:
             conn.execute("""
-                INSERT INTO source_posts (message_id, text, created_at)
-                VALUES (?, ?, ?)
-            """, (message.message_id, post_text, now()))
+                INSERT INTO source_posts (message_id, text, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+            """, (message.message_id, post_text, posted_at, posted_at))
             conn.execute("""
                 INSERT INTO signals
                 (instrument, direction, timeframe, details, created_at, created_by)
@@ -1183,7 +1205,7 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                 "CHANNEL POST",
                 "-",
                 post_text[:3000],
-                now(),
+                posted_at,
                 0,
             ))
     except sqlite3.IntegrityError:
@@ -1242,7 +1264,10 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
 async def signals_pro_edited_handler(message: Message, bot: Bot):
     source_text = message.text or message.caption or ""
     with connect_db() as conn:
-        conn.execute("UPDATE source_posts SET text=? WHERE message_id=?", (source_text, message.message_id))
+        conn.execute(
+            "UPDATE source_posts SET text=?, updated_at=? WHERE message_id=?",
+            (source_text, now(), message.message_id),
+        )
         deliveries = conn.execute(
             "SELECT user_id, copied_message_id FROM source_deliveries WHERE source_message_id=?",
             (message.message_id,),
