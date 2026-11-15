@@ -373,7 +373,7 @@ def signal_action_keyboard():
         [InlineKeyboardButton(
             text="📝 Регистрация у брокера",
             url="https://go.intrade.bar/n4FmpAFBYfvE",
-            style="primary",
+            style="success",
         )],
         [InlineKeyboardButton(
             text="🤖 Подключить автоторговлю",
