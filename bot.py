@@ -348,7 +348,7 @@ async def fetch_and_store_news():
 # User menu.
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="⚡ БИНАРНЫЕ ОПЦИОНЫ", style="primary")],
+        [KeyboardButton(text="📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", style="primary")],
         [KeyboardButton(text="📅 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="success")],
         [
             KeyboardButton(text="📊 СТАТИСТИКА", style="danger"),
@@ -464,7 +464,7 @@ async def show_main_menu(message):
         "💠 QUANTUM TRADE AI\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "Добро пожаловать в интеллектуальную торговую платформу!\n\n"
-        "⚡ Бинарные опционы\n"
+        "📈 Сигналы для бинарных опционов\n"
         "📅 Экономический календарь\n"
         "📊 Торговая статистика\n"
         "🕘 История сигналов\n"
@@ -590,6 +590,8 @@ async def forex_handler(message: Message):
 # =========================================================
 
 @user_dp.message(F.text.in_({
+    "📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ",
+    "📈 Сигналы для бинарных опционов",
     "⚡ БИНАРНЫЕ ОПЦИОНЫ",
     "⚡ Бинарные опционы",
 }))
@@ -598,7 +600,7 @@ async def options_handler(message: Message):
         return
 
     await message.answer(
-        "⚡ <b>БИНАРНЫЕ ОПЦИОНЫ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+        "📈 <b>СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
         "Выберите нужный раздел. Данные строятся только по публикациям SIGNALS PRO.",
         reply_markup=binary_menu_keyboard(),
     )
@@ -618,7 +620,7 @@ async def crypto_pairs_handler(callback: CallbackQuery):
     await callback.message.edit_text(
         "\n".join(lines),
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [colored_button("⬅️ К бинарным опционам", "binary_menu", "primary")],
+            [colored_button("⬅️ К сигналам для бинарных опционов", "binary_menu", "primary")],
         ]),
     )
     await callback.answer()
@@ -740,7 +742,7 @@ async def binary_pair_history(callback: CallbackQuery):
 @user_dp.callback_query(F.data == "binary_menu")
 async def binary_menu(callback: CallbackQuery):
     await callback.message.edit_text(
-        "⚡ <b>БИНАРНЫЕ ОПЦИОНЫ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+        "📈 <b>СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
         "Выберите раздел. Отображаются только фактические данные SIGNALS PRO.",
         reply_markup=binary_menu_keyboard(),
     )
