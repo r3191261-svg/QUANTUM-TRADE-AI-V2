@@ -812,7 +812,6 @@ async def options_handler(message: Message):
 
 def binary_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [colored_button("💱 ВСЕ ВАЛЮТНЫЕ ПАРЫ", "binary_all_pairs", "primary")],
         [colored_button("📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", "binary_recent_10", "success")],
     ])
 
@@ -1209,9 +1208,9 @@ async def history_handler(message: Message):
         try:
             signal_time = datetime.fromisoformat(created_at).astimezone(
                 timezone(timedelta(hours=5))
-            ).strftime("%d.%m %H:%M")
+            ).strftime("%H:%M")
         except (TypeError, ValueError):
-            signal_time = created_at or "время не указано"
+            signal_time = (created_at or "время не указано")[-8:-3] if created_at else "время не указано"
         text += (
             f"\n{signal_result_marker(body)} {signal_time} · "
             f"{html.escape(body)}\n"
@@ -1219,12 +1218,18 @@ async def history_handler(message: Message):
         )
 
     for row in manual_rows:
+        try:
+            manual_time = datetime.fromisoformat(row[5]).astimezone(
+                timezone(timedelta(hours=5))
+            ).strftime("%H:%M")
+        except (TypeError, ValueError):
+            manual_time = (row[5] or "время не указано")[-8:-3] if row[5] else "время не указано"
         text += (
             f"\n{signal_result_marker(row[4])} #{row[0]} | {html.escape(row[1] or '')}\n"
             f"Направление: {html.escape(row[2] or '')}\n"
             f"Таймфрейм: {html.escape(row[3] or '')}\n"
             f"Комментарий: {html.escape(row[4] or '')}\n"
-            f"Время UTC: {row[5]}\n"
+            f"Время: {manual_time}\n"
             "──────────────\n"
         )
 
