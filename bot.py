@@ -771,7 +771,7 @@ async def custom_emoji_markup(bot, fallback_emoji):
                 custom_id = getattr(sticker, "custom_emoji_id", None)
                 if custom_id:
                     _CUSTOM_EMOJI_PACK[sticker.emoji or fallback_emoji] = custom_id
-        except TelegramAPIError:
+        except Exception:
             log.exception("Could not load custom emoji pack %s", CUSTOM_EMOJI_PACK_NAME)
 
     custom_id = _CUSTOM_EMOJI_PACK.get(fallback_emoji)
@@ -1559,12 +1559,12 @@ async def profile_callback(callback: CallbackQuery):
 async def decorate_signal_copy(bot, user_id, copied_message_id, message):
     """Add one animated emoji from the configured pack to an already-copied post."""
     if message.text:
-        content = message.html_text or html.escape(message.text)
+        content = getattr(message, "html_text", None) or html.escape(message.text)
         limit = 4096
         edit = bot.edit_message_text
         field = "text"
     elif message.caption is not None:
-        content = message.html_caption or html.escape(message.caption)
+        content = getattr(message, "html_caption", None) or html.escape(message.caption)
         limit = 1024
         edit = bot.edit_message_caption
         field = "caption"
