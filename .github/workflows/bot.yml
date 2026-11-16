@@ -1,11 +1,14 @@
 name: QUANTUM TRADE AI
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
   group: quantum-trade-ai
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   run-bot:
