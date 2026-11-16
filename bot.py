@@ -550,7 +550,6 @@ main_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="success")],
         [
             KeyboardButton(text="👤 МОЙ ПРОФИЛЬ", style="success"),
-            KeyboardButton(text="⚙️ НАСТРОЙКИ", style="success"),
         ],
     ],
     resize_keyboard=True,
@@ -1359,16 +1358,9 @@ async def notifications_handler(message: Message):
 @user_dp.message(Command("settings"))
 @user_dp.message(F.text.in_({"⚙️ НАСТРОЙКИ", "⚙️ Настройки"}))
 async def settings_handler(message: Message):
-    if not await check_user(message):
-        return
-
-    user = get_user(message.from_user.id)
-    await message.answer(
-        "⚙️ QUANTUM SETTINGS\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "Персональные настройки аккаунта:",
-        reply_markup=settings_keyboard(bool(user[4])),
-    )
+    # Keep /settings and old keyboard text as compatibility aliases for
+    # the single user preference that remains: signal notifications.
+    await notifications_handler(message)
 
 
 @user_dp.callback_query(F.data == "toggle_notifications")
@@ -2354,7 +2346,6 @@ async def main():
             BotCommand(command="history", description="История сигналов за сутки"),
             BotCommand(command="autotrade", description="Подключение автоторговли"),
             BotCommand(command="notifications", description="Настройки уведомлений"),
-            BotCommand(command="settings", description="Настройки пользователя"),
             BotCommand(command="profile", description="Мой профиль"),
         ]
         admin_commands = [
