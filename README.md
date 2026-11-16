@@ -35,4 +35,33 @@ The user bot must be a member of SIGNALS PRO (`-1003979525371`) and receive chan
 
 The workflow is manually dispatched and serializes runs so the same tokens are not polled by concurrent workflow instances. GitHub-hosted runners are time-limited; their local SQLite file is ephemeral and disappears between runs. Configure the GitHub Actions secret `DATABASE_URL` to use a managed PostgreSQL database for persistent history. Before switching databases, export the existing `quantum.db` and import it with `python migrate_sqlite_to_postgres.py quantum.db` while `DATABASE_URL` points to PostgreSQL. A database alone does not keep the bot process online: the workflow has a 350-minute limit. For reliable 24/7 polling, run exactly one bot process on an always-on worker or VPS and set the same `DATABASE_URL` there. Free app plans may sleep or have usage limits and should not be presented as guaranteed 24/7 hosting; check the provider's current plan limits before moving real user data.
 
+## Deploy on your VPS with Docker Compose
+
+The `compose.yaml` runs PostgreSQL and the bot with restart policies and a persistent Docker volume. The database port is not exposed publicly. On a Linux VPS with Docker Compose installed:
+
+```sh
+git clone https://github.com/r3191261-svg/QUANTUM-TRADE-AI-V2.git
+cd QUANTUM-TRADE-AI-V2
+cp .env.example .env
+openssl rand -hex 32
+```
+
+Put the generated hex string into `POSTGRES_PASSWORD` in `.env`, fill in both bot tokens and the real owner ID, then start once:
+
+```sh
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=100 bot
+```
+
+To migrate an existing SQLite file before starting the bot, copy `quantum.db` securely to the VPS, then run:
+
+```sh
+docker compose run --rm \
+  -v /absolute/path/quantum.db:/migration/quantum.db:ro \
+  bot python migrate_sqlite_to_postgres.py /migration/quantum.db
+```
+
+Migrate only once. Stop the old GitHub Actions poller before starting the VPS bot so the same Telegram tokens are never polled by two instances. Keep `.env` only on the VPS, and make regular PostgreSQL backups.
+
 Signals and news are informational only and are not financial advice. Real automatic execution requires a documented Intrade Bar API, credentials, and explicit integration work; none are present in this repository.

@@ -1,8 +1,12 @@
 __pycache__/
 *.py[cod]
 .env
+.env.*
+!.env.example
 .venv/
 venv/
 quantum.db
 *.db-shm
 *.db-wal
+*.sqlite
+*.sqlite3
