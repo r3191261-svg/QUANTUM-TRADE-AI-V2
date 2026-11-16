@@ -23,6 +23,7 @@ from aiogram.types import (
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
+    BotCommand,
     FSInputFile,
     ErrorEvent,
 )
@@ -791,6 +792,7 @@ async def forex_handler(message: Message):
 # BINARY OPTIONS
 # =========================================================
 
+@user_dp.message(Command("signals"))
 @user_dp.message(F.text.in_({
     "📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ",
     "📈 Сигналы для бинарных опционов",
@@ -1089,6 +1091,7 @@ async def news_back_callback(callback: CallbackQuery):
 # LEGACY ECONOMIC CALENDAR — KEPT, NOT SHOWN IN NEW MENU
 # =========================================================
 
+@user_dp.message(Command("calendar"))
 @user_dp.message(F.text.in_({"📅 Экономический календарь", "📅 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ"}))
 async def calendar_handler(message: Message):
     if not await check_user(message):
@@ -1124,6 +1127,7 @@ def signal_result_marker(details):
     return "⏳"
 
 
+@user_dp.message(Command("stats"))
 @user_dp.message(F.text.in_({"📊 СТАТИСТИКА", "📈 Статистика"}))
 async def statistics_handler(message: Message):
     if not await check_user(message):
@@ -1164,6 +1168,7 @@ async def statistics_handler(message: Message):
 # SIGNAL HISTORY
 # =========================================================
 
+@user_dp.message(Command("history"))
 @user_dp.message(F.text.in_({
     "🕘 ИСТОРИЯ СИГНАЛОВ",
     "🕘 История сигналов",
@@ -1230,6 +1235,7 @@ async def history_handler(message: Message):
 # AUTOMATIC BOT
 # =========================================================
 
+@user_dp.message(Command("autotrade"))
 @user_dp.message(F.text.in_({
     "🤖 АВТОМАТИЧЕСКИЙ БОТ",
     "🤖 Автоматический бот",
@@ -1264,6 +1270,7 @@ async def autotrade_handler(message: Message):
 # PROFILE
 # =========================================================
 
+@user_dp.message(Command("profile"))
 @user_dp.message(F.text.in_({"👤 МОЙ ПРОФИЛЬ", "👤 Мой профиль"}))
 async def profile_handler(message: Message):
     if not await check_user(message):
@@ -1330,6 +1337,7 @@ async def my_signals_handler(message: Message):
     await message.answer(text[:4000])
 
 
+@user_dp.message(Command("notifications"))
 @user_dp.message(F.text.in_({"🔔 УВЕДОМЛЕНИЯ", "🔔 Уведомления"}))
 async def notifications_handler(message: Message):
     if not await check_user(message):
@@ -1343,6 +1351,7 @@ async def notifications_handler(message: Message):
     )
 
 
+@user_dp.message(Command("settings"))
 @user_dp.message(F.text.in_({"⚙️ НАСТРОЙКИ", "⚙️ Настройки"}))
 async def settings_handler(message: Message):
     if not await check_user(message):
@@ -2331,6 +2340,39 @@ async def main():
             user_bot.get_me(),
             admin_bot.get_me(),
         )
+
+        user_commands = [
+            BotCommand(command="start", description="Открыть главное меню"),
+            BotCommand(command="signals", description="Сигналы для бинарных опционов"),
+            BotCommand(command="calendar", description="Экономический календарь"),
+            BotCommand(command="stats", description="Результаты за последние 24 часа"),
+            BotCommand(command="history", description="История сигналов за сутки"),
+            BotCommand(command="autotrade", description="Подключение автоторговли"),
+            BotCommand(command="notifications", description="Настройки уведомлений"),
+            BotCommand(command="settings", description="Настройки пользователя"),
+            BotCommand(command="profile", description="Мой профиль"),
+        ]
+        admin_commands = [
+            BotCommand(command="start", description="Открыть панель администратора"),
+            BotCommand(command="panel", description="Открыть панель администратора"),
+            BotCommand(command="help", description="Список команд администратора"),
+            BotCommand(command="myid", description="Показать Telegram ID"),
+            BotCommand(command="stats", description="Статистика пользователей и сигналов"),
+            BotCommand(command="users", description="Последние пользователи"),
+            BotCommand(command="signal", description="Опубликовать сигнал"),
+            BotCommand(command="broadcast", description="Отправить рассылку"),
+            BotCommand(command="reply", description="Ответить пользователю по ID"),
+            BotCommand(command="ban", description="Заблокировать пользователя"),
+            BotCommand(command="unban", description="Снять блокировку"),
+            BotCommand(command="suspend", description="Приостановить доступ"),
+            BotCommand(command="restore", description="Восстановить доступ"),
+            BotCommand(command="audit", description="Журнал действий"),
+            BotCommand(command="adminlist", description="Список администраторов"),
+            BotCommand(command="addadmin", description="Добавить администратора"),
+            BotCommand(command="removeadmin", description="Удалить администратора"),
+        ]
+        await user_bot.set_my_commands(user_commands)
+        await admin_bot.set_my_commands(admin_commands)
 
         log.info("Пользовательский бот: @%s", user_info.username)
         log.info("Административный бот: @%s", admin_info.username)
