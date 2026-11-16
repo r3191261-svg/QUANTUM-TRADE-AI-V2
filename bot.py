@@ -88,10 +88,16 @@ DB_PATH = os.getenv("DB_PATH", "quantum.db")
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif")
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
-CUSTOM_EMOJI_PACK_NAME = os.getenv(
-    "CUSTOM_EMOJI_PACK_NAME", "AR_PREMIUM"
-).strip()
+DEFAULT_CUSTOM_EMOJI_PACKS = (
+    "svoy_v_alfe,AR_PREMIUM,TrendsEmoji,zholto_rozovij,NewsEmoji"
+)
+CUSTOM_EMOJI_PACK_NAMES = tuple(
+    name.strip()
+    for name in os.getenv("CUSTOM_EMOJI_PACK_NAMES", DEFAULT_CUSTOM_EMOJI_PACKS).split(",")
+    if name.strip()
+)
 _CUSTOM_EMOJI_PACK = None
+_CUSTOM_EMOJI_INDEX = {}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -764,7 +770,7 @@ async def custom_emoji_markup(bot, fallback_emoji):
     if _CUSTOM_EMOJI_PACK is None:
         await setup_custom_emojis(bot)
 
-    custom_id = _CUSTOM_EMOJI_PACK.get(fallback_emoji)
+    custom_id = next_custom_emoji_id(fallback_emoji)
     if not custom_id:
         return fallback_emoji
     return f'<tg-emoji emoji-id="{custom_id}">{html.escape(fallback_emoji)}</tg-emoji>'
@@ -784,16 +790,30 @@ async def setup_custom_emojis(bot):
     get_sticker_set = getattr(bot, "get_sticker_set", None)
     if not callable(get_sticker_set):
         return
-    try:
-        sticker_set = await get_sticker_set(CUSTOM_EMOJI_PACK_NAME)
-        for sticker in sticker_set.stickers:
-            custom_id = getattr(sticker, "custom_emoji_id", None)
-            if custom_id:
-                _CUSTOM_EMOJI_PACK[sticker.emoji or ""] = custom_id
-        log.info("Loaded %d custom emojis from %s", len(_CUSTOM_EMOJI_PACK), CUSTOM_EMOJI_PACK_NAME)
-    except Exception:
-        log.exception("Could not load custom emoji pack %s", CUSTOM_EMOJI_PACK_NAME)
-        _CUSTOM_EMOJI_PACK = {}
+    for pack_name in CUSTOM_EMOJI_PACK_NAMES:
+        try:
+            sticker_set = await get_sticker_set(pack_name)
+            pack_count = 0
+            for sticker in sticker_set.stickers:
+                custom_id = getattr(sticker, "custom_emoji_id", None)
+                emoji = sticker.emoji or ""
+                if custom_id and emoji:
+                    _CUSTOM_EMOJI_PACK.setdefault(emoji, []).append(custom_id)
+                    pack_count += 1
+            log.info("Loaded %d custom emojis from %s", pack_count, pack_name)
+        except Exception:
+            log.exception("Could not load custom emoji pack %s", pack_name)
+    log.info("Loaded custom emoji mappings for %d distinct symbols", len(_CUSTOM_EMOJI_PACK))
+
+
+def next_custom_emoji_id(emoji):
+    """Cycle through matching stickers from the configured sets for visual variety."""
+    sticker_ids = (_CUSTOM_EMOJI_PACK or {}).get(emoji, ())
+    if not sticker_ids:
+        return None
+    index = _CUSTOM_EMOJI_INDEX.get(emoji, 0)
+    _CUSTOM_EMOJI_INDEX[emoji] = index + 1
+    return sticker_ids[index % len(sticker_ids)]
 
 
 def render_custom_emojis(text):
@@ -807,23 +827,27 @@ def render_custom_emojis(text):
         return f"\x00CUSTOM_EMOJI_{len(protected) - 1}\x00"
 
     text = re.sub(r"<tg-emoji\b[^>]*>.*?</tg-emoji>", protect, text, flags=re.S)
-    emoji_map = {}
-    for emoji, custom_id in _CUSTOM_EMOJI_PACK.items():
-        if emoji and custom_id:
-            emoji_map[emoji] = custom_id
+    emoji_map = {
+        emoji: custom_ids
+        for emoji, custom_ids in _CUSTOM_EMOJI_PACK.items()
+        if emoji and custom_ids
+    }
     if not emoji_map:
         return text
     emoji_pattern = re.compile("|".join(re.escape(item) for item in sorted(emoji_map, key=len, reverse=True)))
     text = emoji_pattern.sub(
-        lambda match: (
-            f'<tg-emoji emoji-id="{emoji_map[match.group(0)]}">'
-            f'{html.escape(match.group(0))}</tg-emoji>'
-        ),
+        lambda match: custom_emoji_entity(match.group(0), next_custom_emoji_id(match.group(0))),
         text,
     )
     for index, block in enumerate(protected):
         text = text.replace(f"\x00CUSTOM_EMOJI_{index}\x00", block)
     return text
+
+
+def custom_emoji_entity(emoji, custom_id):
+    if not custom_id:
+        return html.escape(emoji)
+    return f'<tg-emoji emoji-id="{custom_id}">{html.escape(emoji)}</tg-emoji>'
 
 
 def apply_custom_button_icons(reply_markup):
@@ -841,7 +865,7 @@ def apply_custom_button_icons(reply_markup):
             for emoji in sorted(_CUSTOM_EMOJI_PACK, key=len, reverse=True):
                 if emoji and emoji in label:
                     try:
-                        button.icon_custom_emoji_id = _CUSTOM_EMOJI_PACK[emoji]
+                        button.icon_custom_emoji_id = next_custom_emoji_id(emoji)
                         if getattr(button, "callback_data", None) or getattr(button, "url", None):
                             button.text = label.replace(emoji, "", 1).lstrip()
                     except Exception:
