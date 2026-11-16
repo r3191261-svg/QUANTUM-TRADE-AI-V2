@@ -82,6 +82,7 @@ DB_PATH = os.getenv("DB_PATH", "quantum.db")
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif")
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
+WELCOME_STICKER_FILE_ID = os.getenv("WELCOME_STICKER_FILE_ID", "").strip()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -256,6 +257,12 @@ def init_db():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS admins (
                 user_id BIGINT PRIMARY KEY
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                name TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             )
         """)
         conn.execute("""
@@ -717,7 +724,12 @@ async def start_handler(message: Message):
             ).rowcount
         if claimed:
             try:
-                if INTRO_GIF_FILE_ID:
+                sticker_file_id = get_app_setting(
+                    "welcome_sticker_file_id", WELCOME_STICKER_FILE_ID
+                )
+                if sticker_file_id:
+                    await message.answer_sticker(sticker_file_id)
+                elif INTRO_GIF_FILE_ID:
                     await message.answer_animation(INTRO_GIF_FILE_ID)
                 elif os.path.isfile(INTRO_GIF_PATH):
                     await message.answer_animation(FSInputFile(INTRO_GIF_PATH))
@@ -736,6 +748,33 @@ async def start_handler(message: Message):
         [colored_button("🔴 ❌ ОТКЛОНИТЬ", "signals_decline", "danger")],
     ])
     await message.answer(welcome_text, reply_markup=keyboard)
+
+
+def get_app_setting(name, default=""):
+    with connect_db() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE name=?", (name,)
+        ).fetchone()
+    return row[0] if row and row[0] else default
+
+
+@user_dp.message(F.sticker)
+async def owner_welcome_sticker_handler(message: Message):
+    if not message.from_user or message.from_user.id != OWNER_ID or not message.sticker:
+        return
+
+    sticker = message.sticker
+    if not (sticker.is_animated or sticker.is_video):
+        await message.answer("Пришлите анимированный стикер или видеостикер для приветствия.")
+        return
+
+    with connect_db() as conn:
+        conn.execute(
+            "INSERT INTO app_settings (name, value) VALUES (?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET value=excluded.value",
+            ("welcome_sticker_file_id", sticker.file_id),
+        )
+    await message.answer("Анимированный стикер сохранён. Он будет показываться в приветствии новым пользователям.")
 
 
 @user_dp.callback_query(F.data.in_({"signals_accept", "signals_decline"}))
