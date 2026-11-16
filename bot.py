@@ -15,6 +15,8 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     Message,
@@ -67,6 +69,7 @@ NEWS_POLL_SECONDS = max(60, int(os.getenv("NEWS_POLL_SECONDS", "").strip() or "3
 NEWS_LIMIT = 100
 NEWS_REPUBLISH_ALLOWED = os.getenv("NEWS_REPUBLISH_ALLOWED", "false").strip().lower() == "true"
 SUPPORT_URL = "https://t.me/copy_broker_BO_bot"
+REGISTRATION_URL = "https://clck.ru/3X2xAM"
 LOCAL_TZ = timezone(timedelta(hours=5), "Asia/Tashkent")
 
 # ISO 4217 currency codes plus commonly quoted crypto tickers. Signals are
@@ -96,8 +99,13 @@ log = logging.getLogger("QUANTUM_TRADE_AI")
 user_dp = Dispatcher(storage=MemoryStorage())
 admin_dp = Dispatcher()
 
+
+class SupportRequest(StatesGroup):
+    waiting_text = State()
+
 # Set in main(); admin handlers use this bot to deliver user broadcasts.
 USER_BOT: Bot | None = None
+ADMIN_BOT: Bot | None = None
 _POSTGRES_POOL = None
 _POSTGRES_POOL_LOCK = threading.Lock()
 
@@ -568,13 +576,18 @@ def signal_action_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="📝 Регистрация у брокера",
-            url="https://go.intrade.bar/n4FmpAFBYfvE",
+            url=REGISTRATION_URL,
             style="success",
         )],
         [InlineKeyboardButton(
             text="🤖 Подключить автоторговлю",
             url=SUPPORT_URL,
             style="success",
+        )],
+        [InlineKeyboardButton(
+            text="✉️ Написать администратору",
+            callback_data="support_admin",
+            style="primary",
         )],
     ])
 
@@ -1284,13 +1297,18 @@ async def autotrade_handler(message: Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="📝 Регистрация у брокера",
-            url="https://go.intrade.bar/n4FmpAFBYfvE",
+            url=REGISTRATION_URL,
             style="primary",
         )],
         [InlineKeyboardButton(
             text="🤖 Подключить автоторговлю",
             style="success",
             url=SUPPORT_URL,
+        )],
+        [InlineKeyboardButton(
+            text="✉️ Написать администратору",
+            style="primary",
+            callback_data="support_admin",
         )],
     ])
 
@@ -1301,6 +1319,69 @@ async def autotrade_handler(message: Message):
         "Просто выберите действие.",
         reply_markup=keyboard,
     )
+
+
+@user_dp.callback_query(F.data == "support_admin")
+async def support_admin_start(callback: CallbackQuery, state: FSMContext):
+    user = get_user(callback.from_user.id)
+    if not user or user[3] != "active":
+        await callback.answer("Доступ ограничен.", show_alert=True)
+        return
+
+    if await state.get_state() == SupportRequest.waiting_text.state:
+        await callback.answer("Ожидаю ваше сообщение.")
+        return
+
+    await state.set_state(SupportRequest.waiting_text)
+    await callback.message.answer(
+        "Напишите вопрос одним сообщением — я передам его администратору.\n"
+        "Для отмены отправьте /cancel."
+    )
+    await callback.answer()
+
+
+@user_dp.message(SupportRequest.waiting_text, Command("cancel"))
+async def support_admin_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("Обращение отменено.")
+
+
+@user_dp.message(SupportRequest.waiting_text, F.text)
+async def support_admin_send(message: Message, state: FSMContext):
+    if not message.from_user:
+        await state.clear()
+        return
+
+    if ADMIN_BOT is None:
+        await message.answer("Не удалось передать обращение: бот администратора сейчас недоступен. Попробуйте позже.")
+        return
+
+    username = f"@{message.from_user.username}" if message.from_user.username else "не указан"
+    admin_text = (
+        "📩 <b>Новое обращение в поддержку</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"Пользователь: {html.escape(message.from_user.full_name)}\n"
+        f"Username: {html.escape(username)}\n"
+        f"ID: <code>{message.from_user.id}</code>\n\n"
+        f"{html.escape(message.text)}\n\n"
+        f"Ответ: <code>/reply {message.from_user.id} текст</code>"
+    )
+    try:
+        await ADMIN_BOT.send_message(OWNER_ID, admin_text)
+        await state.clear()
+        record_delivery(message.message_id, OWNER_ID, "sent")
+        audit(message.from_user.id, "support_request", OWNER_ID)
+        await message.answer("Ваше сообщение передано администратору.")
+    except TelegramAPIError as error:
+        log.exception("Could not deliver support request from user %s", message.from_user.id)
+        record_delivery(message.message_id, OWNER_ID, "failed", error)
+        record_runtime_error("support_request", error)
+        await message.answer("Не удалось передать обращение. Попробуйте отправить его ещё раз позже.")
+
+
+@user_dp.message(SupportRequest.waiting_text)
+async def support_admin_non_text(message: Message):
+    await message.answer("Пожалуйста, отправьте обращение текстом. Для отмены — /cancel.")
 
 
 # =========================================================
@@ -1475,6 +1556,52 @@ async def profile_callback(callback: CallbackQuery):
 # SOURCE CHANNEL AUTO-FORWARDING
 # =========================================================
 
+async def decorate_signal_copy(bot, user_id, copied_message_id, message):
+    """Add one animated emoji from the configured pack to an already-copied post."""
+    if message.text:
+        content = message.html_text or html.escape(message.text)
+        limit = 4096
+        edit = bot.edit_message_text
+        field = "text"
+    elif message.caption is not None:
+        content = message.html_caption or html.escape(message.caption)
+        limit = 1024
+        edit = bot.edit_message_caption
+        field = "caption"
+    else:
+        return
+
+    if len(message.text or message.caption or "") > limit - 3:
+        return
+
+    icon = await custom_emoji_markup(bot, "📈")
+    decorated = f"{icon} {content}"
+    common = {
+        "chat_id": user_id,
+        "message_id": copied_message_id,
+        "reply_markup": signal_action_keyboard(),
+        "parse_mode": ParseMode.HTML,
+    }
+    try:
+        if field == "text":
+            await edit(**common, text=decorated)
+        else:
+            await edit(**common, caption=decorated)
+    except TelegramBadRequest as error:
+        if "<tg-emoji " not in decorated:
+            log.warning("Could not add animated emoji to forwarded signal: %s", error)
+            return
+        fallback = re.sub(r'<tg-emoji emoji-id="[^"]+">(.*?)</tg-emoji>', r"\1", decorated)
+        try:
+            if field == "text":
+                await edit(**common, text=fallback)
+            else:
+                await edit(**common, caption=fallback)
+        except TelegramAPIError:
+            log.exception("Could not add animated or fallback emoji to forwarded signal")
+    except TelegramAPIError:
+        log.exception("Could not decorate forwarded signal %s", copied_message_id)
+
 @user_dp.channel_post(F.chat.id == SOURCE_CHANNEL_ID)
 async def signals_pro_channel_handler(message: Message, bot: Bot):
     """
@@ -1541,6 +1668,7 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                     message_id=message.message_id,
                     reply_markup=signal_action_keyboard(),
                 )
+                await decorate_signal_copy(bot, user_id, copied.message_id, message)
             with connect_db() as conn:
                 conn.execute(
                     "INSERT OR IGNORE INTO source_deliveries "
@@ -1595,16 +1723,8 @@ async def signals_pro_edited_handler(message: Message, bot: Bot):
     updated = 0
     for user_id, copied_id in deliveries:
         try:
-            if message.text:
-                await bot.edit_message_text(
-                    chat_id=user_id, message_id=copied_id, text=message.html_text,
-                    parse_mode=ParseMode.HTML, reply_markup=signal_action_keyboard(),
-                )
-            elif message.caption is not None:
-                await bot.edit_message_caption(
-                    chat_id=user_id, message_id=copied_id, caption=message.html_caption,
-                    parse_mode=ParseMode.HTML, reply_markup=signal_action_keyboard(),
-                )
+            if message.text or message.caption is not None:
+                await decorate_signal_copy(bot, user_id, copied_id, message)
             updated += 1
             await asyncio.sleep(0.05)
         except TelegramBadRequest as error:
@@ -1655,6 +1775,7 @@ async def admin_help(message: Message):
         "/users — пользователи\n"
         "/signal — публикация сигнала\n"
         "/broadcast — рассылка\n"
+        "/reply ID текст — ответить на обращение\n"
         "/ban ID — блокировка\n"
         "/unban ID — разблокировка\n"
         "/suspend ID — приостановка\n"
@@ -2352,7 +2473,7 @@ async def admin_buttons(callback: CallbackQuery):
 # =========================================================
 
 async def main():
-    global USER_BOT
+    global USER_BOT, ADMIN_BOT
     init_db()
 
     if not TOKEN_USER:
@@ -2364,6 +2485,7 @@ async def main():
     user_bot = Bot(token=TOKEN_USER, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     admin_bot = Bot(token=TOKEN_ADMIN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     USER_BOT = user_bot
+    ADMIN_BOT = admin_bot
 
     try:
         user_info, admin_info = await asyncio.gather(
