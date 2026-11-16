@@ -586,12 +586,12 @@ def colored_button(text, callback_data, style="primary"):
 def signal_action_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="📝 Регистрация у брокера",
+            text="➡️ Регистрация у брокера",
             url=REGISTRATION_URL,
             style="success",
         )],
         [InlineKeyboardButton(
-            text="🤖 Подключить автоторговлю",
+            text="➡️ Подключить автоторговлю",
             url=SUPPORT_URL,
             style="success",
         )],
@@ -871,6 +871,15 @@ def render_custom_emojis(text):
     if not text:
         return text
     protected = []
+    visible_fallbacks = []
+
+    # Keep these two result states readable even when a selected pack has no
+    # animated equivalent for them. When it does, they are replaced normally.
+    for marker in ("⭕", "⏳"):
+        if marker not in (_CUSTOM_EMOJI_PACK or {}):
+            placeholder = f"\x00RESULT_MARKER_{len(visible_fallbacks)}\x00"
+            visible_fallbacks.append((placeholder, marker))
+            text = text.replace(marker, placeholder)
 
     def protect(match):
         protected.append(match.group(0))
@@ -881,6 +890,8 @@ def render_custom_emojis(text):
         text = remove_emoji_characters(text)
         for index, block in enumerate(protected):
             text = text.replace(f"\x00CUSTOM_EMOJI_{index}\x00", block)
+        for placeholder, marker in visible_fallbacks:
+            text = text.replace(placeholder, marker)
         return text
     emoji_map = {
         emoji: custom_ids
@@ -888,6 +899,9 @@ def render_custom_emojis(text):
         if emoji and custom_ids
     }
     if not emoji_map:
+        text = remove_emoji_characters(text)
+        for placeholder, marker in visible_fallbacks:
+            text = text.replace(placeholder, marker)
         return text
     emoji_pattern = re.compile("|".join(re.escape(item) for item in sorted(emoji_map, key=len, reverse=True)))
     text = emoji_pattern.sub(
@@ -898,6 +912,8 @@ def render_custom_emojis(text):
     text = remove_emoji_characters(text)
     for index, block in enumerate(protected):
         text = text.replace(f"\x00CUSTOM_EMOJI_{index}\x00", block)
+    for placeholder, marker in visible_fallbacks:
+        text = text.replace(placeholder, marker)
     return text
 
 
@@ -995,6 +1011,43 @@ RU_EN_TRANSLATIONS = {
     "Уведомления включены.": "Notifications enabled.",
     "Уведомления отключены.": "Notifications disabled.",
     "Сначала нажмите /start.": "Please press /start first.",
+    "ПЕРСОНАЛЬНЫЕ НАСТРОЙКИ": "PREFERENCES",
+    "ВКЛ": "ON",
+    "ВЫКЛ": "OFF",
+    "Русский": "Russian",
+    "Выберите нужный раздел.": "Choose a section.",
+    "Сигналы и данные обновляются автоматически.": "Signals and data update automatically.",
+    "К сигналам для бинарных опционов": "Back to binary option signals",
+    "К списку пар": "Back to pairs",
+    "Валютные пары": "Currency pairs",
+    "сигнал(ов)": "signal(s)",
+    "сигналов": "signals",
+    "Далее": "Next",
+    "Некорректная страница.": "Invalid page.",
+    "Ожидаем сигналы в этом боте.": "Waiting for new signals.",
+    "Сигналов с распознанными парами за этот период нет.": "No signals with recognized pairs were found for this period.",
+    "Не удалось определить пару": "Pair could not be identified",
+    "Распознанных сигналов": "Recognized signals",
+    "Время сигналов": "Signal times",
+    "последние сигналы": "latest signals",
+    "История пары не найдена.": "No history found for this pair.",
+    "НОВОСТИ": "NEWS",
+    "Свежие новости": "Latest news",
+    "Новость не найдена.": "News item not found.",
+    "время не указано": "time unavailable",
+    "Описание в RSS источником не предоставлено.": "No description was provided by the RSS source.",
+    "Источник": "Source",
+    "Открыть экономический календарь": "Open economic calendar",
+    "РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 10 МИНУТ": "RESULTS FOR THE LAST 10 MINUTES",
+    "СИГНАЛОВ ДЛЯ БИНАРНЫХ ОПЦИОНОВ": "BINARY OPTION SIGNALS",
+    "ЛИЧНЫЙ КАБИНЕТ": "MY ACCOUNT",
+    "Username": "Username",
+    "не указан": "not specified",
+    "Направление:": "Direction:",
+    "Таймфрейм:": "Timeframe:",
+    "Комментарий:": "Details:",
+    "Оповещения о новых сигналах включены.": "New signal notifications are on.",
+    "Оповещения о новых сигналах выключены.": "New signal notifications are off.",
 }
 
 
@@ -1438,7 +1491,7 @@ async def calendar_handler(message: Message):
         "фактическое значение и прогноз. Откройте официальный календарь по кнопке ниже.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="📅 Открыть экономический календарь",
+                text="🗓 Открыть экономический календарь",
                 url="https://ru.investing.com/economic-calendar/",
                 style="primary",
             )],
@@ -1508,6 +1561,7 @@ async def statistics_handler(message: Message):
     "ИСТОРИЯ СИГНАЛОВ",
     "🕘 История сигналов",
     "История сигналов",
+    "SIGNAL HISTORY",
 }))
 async def history_handler(message: Message):
     if not await check_user(message):
@@ -1591,19 +1645,19 @@ async def autotrade_handler(message: Message):
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
-            text="📝 Регистрация у брокера",
+            text="➡️ Регистрация у брокера",
             url=REGISTRATION_URL,
             style="primary",
         )],
         [InlineKeyboardButton(
-            text="🤖 Подключить автоторговлю",
+            text="➡️ Подключить автоторговлю",
             style="success",
             url=SUPPORT_URL,
         )],
     ])
 
     await message.answer(
-        "🤖 QUANTUM TRADE AI — АВТОМАТИЧЕСКИЙ БОТ\n"
+        "<b>🤖 QUANTUM TRADE AI — АВТОМАТИЧЕСКИЙ БОТ</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "Просто выберите действие.",
         reply_markup=keyboard,
@@ -1692,9 +1746,9 @@ async def profile_handler(message: Message):
     }.get(user[3], "📴 НЕАКТИВЕН")
 
     await message.answer(
-        "👤 ЛИЧНЫЙ КАБИНЕТ\n"
+        "<b>📃 ЛИЧНЫЙ КАБИНЕТ</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"🆔 ID: {user[0]}\n"
+        f"🔤 ID: {user[0]}\n"
         f"👤 Имя: {user[2]}\n"
         f"🚬 Username: {username}\n"
         f"❗️ Статус: {status}\n\n"
@@ -1814,6 +1868,19 @@ async def language_handler(callback: CallbackQuery):
         if language == "ru"
         else "Interface language changed to English."
     )
+    current_user = get_user(callback.from_user.id)
+    enabled = bool(current_user[4]) if current_user else True
+    notice = (
+        "🔔 УВЕДОМЛЕНИЯ\n━━━━━━━━━━━━━━━━━━\n\n"
+        + ("Оповещения о новых сигналах включены." if enabled else "Оповещения о новых сигналах выключены.")
+        if language == "ru"
+        else "🔔 NOTIFICATIONS\n━━━━━━━━━━━━━━━━━━\n\n"
+        + ("New signal notifications are on." if enabled else "New signal notifications are off.")
+    )
+    await callback.message.edit_text(
+        notice,
+        reply_markup=settings_keyboard(enabled),
+    )
 
 
 @user_dp.callback_query(F.data == "profile")
@@ -1827,12 +1894,12 @@ async def profile_callback(callback: CallbackQuery):
     username = "@" + user[1] if user[1] else "не указан"
 
     await callback.message.answer(
-        "👤 МОЙ ПРОФИЛЬ\n"
+        "<b>📃 МОЙ ПРОФИЛЬ</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"🆔 ID: {user[0]}\n"
+        f"🔤 ID: {user[0]}\n"
         f"👤 Имя: {user[2]}\n"
-        f"🌐 Username: {username}\n"
-        f"🔐 Статус: {user[3]}\n"
+        f"🚬 Username: {username}\n"
+        f"❗️ Статус: {'🟢 АКТИВЕН' if user[3] == 'active' else '📴 НЕАКТИВЕН'}\n"
         f"📅 Регистрация: {user[6]}"
     )
     await callback.answer()
