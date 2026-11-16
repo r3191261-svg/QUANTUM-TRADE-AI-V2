@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import html
 import logging
 import os
@@ -560,7 +561,7 @@ async def fetch_and_store_news():
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", style="primary")],
-        [KeyboardButton(text="📅 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="success")],
+        [KeyboardButton(text="🗓 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="success")],
         [
             KeyboardButton(text="📊 СТАТИСТИКА", style="danger"),
             KeyboardButton(text="🕘 ИСТОРИЯ СИГНАЛОВ", style="danger"),
@@ -571,7 +572,7 @@ main_keyboard = ReplyKeyboardMarkup(
         ],
         [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="success")],
         [
-            KeyboardButton(text="👤 МОЙ ПРОФИЛЬ", style="success"),
+            KeyboardButton(text="📃 МОЙ ПРОФИЛЬ", style="success"),
         ],
     ],
     resize_keyboard=True,
@@ -612,13 +613,13 @@ def settings_keyboard(enabled):
 def admin_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [colored_button("📊 Статистика", "admin_stats", "primary")],
-        [colored_button("👥 Пользователи", "admin_users", "primary")],
-        [colored_button("📨 Управление сигналами", "admin_signals", "primary")],
+        [colored_button("👤 Пользователи", "admin_users", "primary")],
+        [colored_button("✏️ Управление сигналами", "admin_signals", "primary")],
         [colored_button("📢 Рассылка", "admin_broadcast", "primary")],
         [colored_button("🚫 Блокировки", "admin_blocks", "danger")],
         [colored_button("🛡 Администраторы", "admin_manage", "primary")],
-        [colored_button("📋 Журнал действий", "admin_audit", "primary")],
-        [colored_button("🩺 Мониторинг", "admin_health", "success")],
+        [colored_button("🗞 Журнал действий", "admin_audit", "primary")],
+        [colored_button("🛜 Мониторинг", "admin_health", "success")],
         [colored_button("⚙️ Настройки бота", "admin_settings", "primary")],
     ])
 
@@ -631,7 +632,7 @@ def admin_back_keyboard():
 
 def admin_health_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [colored_button("🟢 Состояние ботов", "admin_health_status", "success")],
+        [colored_button("🛜 Состояние ботов", "admin_health_status", "success")],
         [colored_button("📨 Последний сигнал", "admin_health_signal", "primary")],
         [colored_button("⚠️ Последние ошибки", "admin_health_errors", "danger")],
         [colored_button("📬 Доставка сообщений", "admin_health_delivery", "primary")],
@@ -713,27 +714,28 @@ async def start_handler(message: Message):
 
     consent = user[7] if user and len(user) > 7 else -1
 
-    if consent in (0, 1):
-        signal_status = "🟢 Сигналы включены.\n\n" if consent == 1 else "🔴 Сигналы выключены.\n\n"
-        await message.answer(
-            "💠 <b>QUANTUM TRADE AI</b>\n" + signal_status + "Выберите нужный раздел:",
-            reply_markup=main_keyboard,
-        )
-        return
-
     welcome_emoji = await custom_emoji_markup(message.bot, "✨")
     welcome_text = (
         "⚡ <b>QUANTUM TRADE AI</b>\n\n"
         f"{welcome_emoji} <b>Добро пожаловать в мир интеллектуальной торговли!</b>\n\n"
         "Мы анализируем рынок за вас, используя современные алгоритмы "
         "искусственного интеллекта, чтобы помочь вам принимать более "
-        "взвешенные торговые решения.\n\n"
-        "📊 <b>Хотите получать торговые сигналы и следить за "
+        "взвешенные торговые решения."
+    )
+    if consent in (0, 1):
+        await message.answer(
+            welcome_text + "\n\n<b>Выберите нужный раздел в меню.</b>",
+            reply_markup=main_keyboard,
+        )
+        return
+
+    welcome_text += (
+        "\n\n📊 <b>Хотите получать торговые сигналы и следить за "
         "возможностями рынка вместе с QUANTUM TRADE AI?</b>"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [colored_button("🟢 ✅ ПРИНЯТЬ", "signals_accept", "success")],
-        [colored_button("🔴 ❌ ОТКЛОНИТЬ", "signals_decline", "danger")],
+        [colored_button("✅ ПРИНЯТЬ", "signals_accept", "success")],
+        [colored_button("❌ ОТКЛОНИТЬ", "signals_decline", "danger")],
     ])
     if welcome_emoji != "✨":
         try:
@@ -905,7 +907,116 @@ def custom_emoji_entity(emoji, custom_id):
     return f'<tg-emoji emoji-id="{custom_id}">{html.escape(emoji)}</tg-emoji>'
 
 
-def apply_custom_button_icons(reply_markup):
+RU_EN_TRANSLATIONS = {
+    "📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ": "BINARY OPTION SIGNALS",
+    "СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ": "BINARY OPTION SIGNALS",
+    "Сигналы для бинарных опционов": "Binary option signals",
+    "🗓 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ": "ECONOMIC CALENDAR",
+    "📅 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ": "ECONOMIC CALENDAR",
+    "ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ": "ECONOMIC CALENDAR",
+    "Экономический календарь": "Economic calendar",
+    "СТАТИСТИКА ЗА ПОСЛЕДНИЕ 24 ЧАСА": "RESULTS FOR THE LAST 24 HOURS",
+    "РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 24 ЧАСА": "RESULTS FOR THE LAST 24 HOURS",
+    "СТАТИСТИКА": "STATISTICS",
+    "Статистика": "Statistics",
+    "ИСТОРИЯ СИГНАЛОВ ЗА 24 ЧАСА": "SIGNAL HISTORY — LAST 24 HOURS",
+    "🕘 ИСТОРИЯ СИГНАЛОВ": "SIGNAL HISTORY",
+    "ИСТОРИЯ СИГНАЛОВ": "SIGNAL HISTORY",
+    "История сигналов": "Signal history",
+    "🤖 АВТОМАТИЧЕСКИЙ БОТ": "AUTOMATED TRADING BOT",
+    "АВТОМАТИЧЕСКИЙ БОТ": "AUTOMATED TRADING BOT",
+    "Автоматический бот": "Automated trading bot",
+    "Подключить автоторговлю": "Connect automated trading",
+    "Регистрация у брокера": "Broker registration",
+    "МОИ СИГНАЛЫ": "MY SIGNALS",
+    "Мои сигналы": "My signals",
+    "Последние опубликованные сигналы": "Latest published signals",
+    "Сигналов с выбранными парами и интервалом пока нет.": "No signals for the selected pairs and interval yet.",
+    "Сигналов пока нет.": "No signals yet.",
+    "🔔 УВЕДОМЛЕНИЯ": "NOTIFICATIONS",
+    "УВЕДОМЛЕНИЯ": "NOTIFICATIONS",
+    "Уведомления": "Notifications",
+    "Оповещения о новых сигналах включены.": "New signal alerts are enabled.",
+    "Оповещения о новых сигналах выключены.": "New signal alerts are disabled.",
+    "📃 МОЙ ПРОФИЛЬ": "MY PROFILE",
+    "👤 МОЙ ПРОФИЛЬ": "MY PROFILE",
+    "МОЙ ПРОФИЛЬ": "MY PROFILE",
+    "Мой профиль": "My profile",
+    "ЛИЧНЫЙ КАБИНЕТ": "MY ACCOUNT",
+    "Имя": "Name",
+    "Статус": "Status",
+    "АКТИВЕН": "ACTIVE",
+    "НЕАКТИВЕН": "INACTIVE",
+    "Выберите нужный раздел в меню.": "Choose a section from the menu.",
+    "Выберите нужный раздел:": "Choose a section:",
+    "Просто выберите действие.": "Please choose an action.",
+    "История сигналов пока пуста.": "Signal history is empty.",
+    "Сигналов за сутки": "Signals in the last 24 hours",
+    "Профиль": "Profile",
+    "Пользователь": "User",
+    "Бинарные опционы": "Binary options",
+    "Календарь макроэкономических событий: время, страна, важность, фактическое значение и прогноз.": "Macroeconomic events calendar: time, country, importance, actual and forecast.",
+    "Откройте официальный календарь по кнопке ниже.": "Open the economic calendar using the button below.",
+    "Добро пожаловать в мир интеллектуальной торговли!": "Welcome to intelligent trading!",
+    "Мы анализируем рынок за вас, используя современные алгоритмы искусственного интеллекта, чтобы помочь вам принимать более взвешенные торговые решения.": "We analyze the market using modern AI algorithms to help you make more informed trading decisions.",
+    "Хотите получать торговые сигналы и следить за возможностями рынка вместе с QUANTUM TRADE AI?": "Would you like to receive trading signals and follow market opportunities with QUANTUM TRADE AI?",
+    "ПРИНЯТЬ": "ACCEPT",
+    "ОТКЛОНИТЬ": "DECLINE",
+    "СИГНАЛЫ ВКЛЮЧЕНЫ": "SIGNALS ENABLED",
+    "СИГНАЛЫ ОТКЛЮЧЕНЫ": "SIGNALS DISABLED",
+    "Вы будете получать новые сигналы.": "You will receive new signals.",
+    "Сигналы отправляться не будут.": "Signals will not be sent.",
+    "Выбор сохранён": "Your choice has been saved",
+    "Активных": "Active",
+    "Заблокированных": "Blocked",
+    "Всего пользователей": "Total users",
+    "Пользователей пока нет.": "There are no users yet.",
+    "Управление сигналами": "Manage signals",
+    "Журнал действий": "Action log",
+    "Мониторинг": "Monitoring",
+    "Состояние ботов": "Bot status",
+    "Последний сигнал": "Latest signal",
+    "Последние ошибки": "Recent errors",
+    "Доставка сообщений": "Message delivery",
+    "К панели администратора": "Back to admin panel",
+    "Назад": "Back",
+    "Обновить": "Refresh",
+    "Время": "Time",
+    "Направление": "Direction",
+    "Таймфрейм": "Timeframe",
+    "Комментарий": "Comment",
+    "Сигналов за сутки": "Signals in the last 24 hours",
+    "ПРИБЫЛЬ": "PROFIT",
+    "ВЫИГРЫШ": "WIN",
+    "ПРОИГРЫШ": "LOSS",
+    "Без текста": "No text",
+    "История пары не найдена.": "No history found for this pair.",
+    "Ожидаем сигналы в этом боте.": "Waiting for signals in this bot.",
+    "Уведомления включены.": "Notifications enabled.",
+    "Уведомления отключены.": "Notifications disabled.",
+    "Сначала нажмите /start.": "Please press /start first.",
+}
+
+
+def translate_to_english(text):
+    for russian, english in sorted(RU_EN_TRANSLATIONS.items(), key=lambda item: len(item[0]), reverse=True):
+        text = text.replace(russian, english)
+    return text
+
+
+def chat_language(chat_id):
+    if not isinstance(chat_id, int) or chat_id <= 0:
+        return "ru"
+    try:
+        with connect_db() as conn:
+            row = conn.execute("SELECT language FROM users WHERE user_id=?", (chat_id,)).fetchone()
+        return "en" if row and row[0] == "en" else "ru"
+    except Exception:
+        log.exception("Could not look up preferred language for chat %s", chat_id)
+        return "ru"
+
+
+def apply_custom_button_icons(reply_markup, language="ru"):
     """Use the selected custom emoji as Telegram button icons when available."""
     if not reply_markup:
         return
@@ -917,6 +1028,8 @@ def apply_custom_button_icons(reply_markup):
             if getattr(button, "icon_custom_emoji_id", None):
                 continue
             label = getattr(button, "text", "") or ""
+            if language == "en":
+                label = translate_to_english(label)
             for emoji in sorted((_CUSTOM_EMOJI_PACK or {}), key=len, reverse=True):
                 if emoji and emoji in label:
                     try:
@@ -937,15 +1050,22 @@ class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
     """Apply the configured premium emoji pack consistently to outgoing messages."""
 
     async def __call__(self, make_request, bot, method):
+        language = chat_language(getattr(method, "chat_id", None))
         for field in ("text", "caption"):
             value = getattr(method, field, None)
             entities_field = "caption_entities" if field == "caption" else "entities"
             if value and hasattr(method, "parse_mode") and not getattr(method, entities_field, None):
+                if language == "en":
+                    value = translate_to_english(value)
                 rendered = render_custom_emojis(value)
-                if rendered != value:
+                if rendered != getattr(method, field, None):
                     setattr(method, field, rendered)
                     method.parse_mode = ParseMode.HTML
-        apply_custom_button_icons(getattr(method, "reply_markup", None))
+        reply_markup = getattr(method, "reply_markup", None)
+        if reply_markup:
+            reply_markup = copy.deepcopy(reply_markup)
+            method.reply_markup = reply_markup
+        apply_custom_button_icons(reply_markup, language)
         return await make_request(bot, method)
 
 
@@ -965,9 +1085,9 @@ async def signal_consent_handler(callback: CallbackQuery):
         )
 
     status = (
-        "🟢 <b>СИГНАЛЫ ВКЛЮЧЕНЫ</b>\nВы будете получать новые сигналы."
+        "✅ <b>СИГНАЛЫ ВКЛЮЧЕНЫ</b>\nВы будете получать новые сигналы."
         if accepted else
-        "🔴 <b>СИГНАЛЫ ОТКЛЮЧЕНЫ</b>\nСигналы отправляться не будут."
+        "⭕ <b>СИГНАЛЫ ОТКЛЮЧЕНЫ</b>\nСигналы отправляться не будут."
     )
     await callback.message.edit_reply_markup(reply_markup=None)
     await callback.answer("Выбор сохранён")
@@ -1008,6 +1128,7 @@ async def forex_handler(message: Message):
     "СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ",
     "📈 Сигналы для бинарных опционов",
     "Сигналы для бинарных опционов",
+    "BINARY OPTION SIGNALS",
     "⚡ БИНАРНЫЕ ОПЦИОНЫ",
     "⚡ Бинарные опционы",
 }))
@@ -1305,7 +1426,7 @@ async def news_back_callback(callback: CallbackQuery):
 # =========================================================
 
 @user_dp.message(Command("calendar"))
-@user_dp.message(F.text.in_({"📅 Экономический календарь", "Экономический календарь", "📅 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", "ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ"}))
+@user_dp.message(F.text.in_({"📅 Экономический календарь", "Экономический календарь", "📅 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", "🗓 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", "ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", "ECONOMIC CALENDAR"}))
 async def calendar_handler(message: Message):
     if not await check_user(message):
         return
@@ -1332,16 +1453,16 @@ async def calendar_handler(message: Message):
 def signal_result_marker(details):
     result_text = (details or "").upper()
     win = re.search(r"\b(WIN|WON|ВЫИГРЫШ|ПРИБЫЛЬ)\b|✅", result_text)
-    loss = re.search(r"\b(LOSS|LOSE|ПРОИГРЫШ|УБЫТОК)\b|❌|✖️", result_text)
+    loss = re.search(r"\b(LOSS|LOSE|ПРОИГРЫШ|УБЫТОК)\b|❌|⭕|✖️|➖", result_text)
     if loss and (not win or loss.start() > win.start()):
-        return "❌"
+        return "⭕"
     if win:
         return "✅"
     return "⏳"
 
 
 @user_dp.message(Command("stats"))
-@user_dp.message(F.text.in_({"📊 СТАТИСТИКА", "СТАТИСТИКА", "📈 Статистика", "Статистика"}))
+@user_dp.message(F.text.in_({"📊 СТАТИСТИКА", "СТАТИСТИКА", "📈 Статистика", "Статистика", "STATISTICS"}))
 async def statistics_handler(message: Message):
     if not await check_user(message):
         return
@@ -1366,7 +1487,7 @@ async def statistics_handler(message: Message):
         marker = signal_result_marker(details)
         if marker == "✅":
             wins += 1
-        elif marker == "❌":
+        elif marker == "⭕":
             losses += 1
     await message.answer(
         "📊 РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 24 ЧАСА\n"
@@ -1460,6 +1581,7 @@ async def history_handler(message: Message):
 @user_dp.message(F.text.in_({
     "🤖 АВТОМАТИЧЕСКИЙ БОТ",
     "АВТОМАТИЧЕСКИЙ БОТ",
+    "AUTOMATED TRADING BOT",
     "🤖 Автоматический бот",
     "Автоматический бот",
 }))
@@ -1483,7 +1605,6 @@ async def autotrade_handler(message: Message):
     await message.answer(
         "🤖 QUANTUM TRADE AI — АВТОМАТИЧЕСКИЙ БОТ\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "Для подключения автоматической торговли необходим аккаунт Intrade Bar.\n\n"
         "Просто выберите действие.",
         reply_markup=keyboard,
     )
@@ -1557,29 +1678,26 @@ async def support_admin_non_text(message: Message):
 # =========================================================
 
 @user_dp.message(Command("profile"))
-@user_dp.message(F.text.in_({"👤 МОЙ ПРОФИЛЬ", "МОЙ ПРОФИЛЬ", "👤 Мой профиль", "Мой профиль"}))
+@user_dp.message(F.text.in_({"👤 МОЙ ПРОФИЛЬ", "📃 МОЙ ПРОФИЛЬ", "МОЙ ПРОФИЛЬ", "👤 Мой профиль", "Мой профиль", "MY PROFILE"}))
 async def profile_handler(message: Message):
     if not await check_user(message):
         return
 
     user = get_user(message.from_user.id)
     username = "@" + user[1] if user[1] else "не указан"
-    registration = (user[6] or "").replace("T", " ")[:16]
-
     status = {
-        "active": "🟢 ACTIVE",
-        "blocked": "🔴 BLOCKED",
-        "suspended": "🟡 SUSPENDED",
-    }.get(user[3], user[3])
+        "active": "🟢 АКТИВЕН",
+        "blocked": "📴 НЕАКТИВЕН",
+        "suspended": "📴 НЕАКТИВЕН",
+    }.get(user[3], "📴 НЕАКТИВЕН")
 
     await message.answer(
         "👤 ЛИЧНЫЙ КАБИНЕТ\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         f"🆔 ID: {user[0]}\n"
         f"👤 Имя: {user[2]}\n"
-        f"🌐 Username: {username}\n"
-        f"📅 Регистрация: {registration} UTC\n"
-        f"🔐 Статус: {status}\n\n"
+        f"🚬 Username: {username}\n"
+        f"❗️ Статус: {status}\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
         "💠 QUANTUM TRADE AI"
     )
@@ -1589,7 +1707,7 @@ async def profile_handler(message: Message):
 # SETTINGS
 # =========================================================
 
-@user_dp.message(F.text.in_({"📈 МОИ СИГНАЛЫ", "МОИ СИГНАЛЫ", "📈 Мои сигналы", "Мои сигналы"}))
+@user_dp.message(F.text.in_({"📈 МОИ СИГНАЛЫ", "МОИ СИГНАЛЫ", "📈 Мои сигналы", "Мои сигналы", "MY SIGNALS"}))
 async def my_signals_handler(message: Message):
     if not await check_user(message):
         return
@@ -1624,7 +1742,7 @@ async def my_signals_handler(message: Message):
 
 
 @user_dp.message(Command("notifications"))
-@user_dp.message(F.text.in_({"🔔 УВЕДОМЛЕНИЯ", "УВЕДОМЛЕНИЯ", "🔔 Уведомления", "Уведомления"}))
+@user_dp.message(F.text.in_({"🔔 УВЕДОМЛЕНИЯ", "УВЕДОМЛЕНИЯ", "🔔 Уведомления", "Уведомления", "NOTIFICATIONS"}))
 async def notifications_handler(message: Message):
     if not await check_user(message):
         return
@@ -1662,7 +1780,7 @@ async def toggle_notifications(callback: CallbackQuery):
         )
 
     user = get_user(callback.from_user.id)
-    if "УВЕДОМЛЕНИЯ" in (callback.message.text or "").upper():
+    if "УВЕДОМЛЕНИЯ" in (callback.message.text or "").upper() or "NOTIFICATIONS" in (callback.message.text or "").upper():
         await callback.message.edit_text(
             "🔔 УВЕДОМЛЕНИЯ\n━━━━━━━━━━━━━━━━━━\n\n"
             + ("Оповещения о новых сигналах включены." if enabled else "Оповещения о новых сигналах выключены."),
@@ -1692,9 +1810,9 @@ async def language_handler(callback: CallbackQuery):
         )
 
     await callback.answer(
-        "Выбран русский язык."
+        "Язык интерфейса изменён на русский."
         if language == "ru"
-        else "English selected. Full translation will be added separately."
+        else "Interface language changed to English."
     )
 
 
