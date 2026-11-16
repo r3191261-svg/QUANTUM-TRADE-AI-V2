@@ -25,6 +25,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     FSInputFile,
+    ErrorEvent,
 )
 from aiogram.exceptions import TelegramAPIError, TelegramConflictError, TelegramBadRequest
 
@@ -96,6 +97,18 @@ admin_dp = Dispatcher()
 USER_BOT: Bot | None = None
 _POSTGRES_POOL = None
 _POSTGRES_POOL_LOCK = threading.Lock()
+
+
+@user_dp.errors()
+async def user_dispatcher_error(event: ErrorEvent):
+    record_runtime_error("user_bot_handler", event.exception)
+    return True
+
+
+@admin_dp.errors()
+async def admin_dispatcher_error(event: ErrorEvent):
+    record_runtime_error("admin_bot_handler", event.exception)
+    return True
 
 
 # =========================================================
@@ -191,6 +204,43 @@ def now():
     return datetime.now(timezone.utc).isoformat()
 
 
+def set_health(component, status, details=""):
+    with connect_db() as conn:
+        conn.execute(
+            "INSERT INTO bot_health (component, status, last_seen, details) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(component) DO UPDATE SET "
+            "status=excluded.status, last_seen=excluded.last_seen, details=excluded.details",
+            (component, status, now(), str(details)[:500]),
+        )
+
+
+def record_runtime_error(component, error):
+    description = str(error).strip() or error.__class__.__name__
+    log.error("%s: %s", component, description)
+    try:
+        with connect_db() as conn:
+            conn.execute(
+                "INSERT INTO runtime_errors (component, description, created_at) "
+                "VALUES (?, ?, ?)",
+                (component[:80], description[:1000], now()),
+            )
+    except Exception:
+        log.exception("Could not persist runtime error")
+
+
+def record_delivery(source_message_id, user_id, status, error=""):
+    try:
+        with connect_db() as conn:
+            conn.execute(
+                "INSERT INTO delivery_events "
+                "(source_message_id, user_id, status, error, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (source_message_id, user_id, status, str(error)[:500], now()),
+            )
+    except Exception:
+        log.exception("Could not persist message delivery metrics")
+
+
 def init_db():
     with connect_db() as conn:
         conn.execute("""
@@ -217,7 +267,8 @@ def init_db():
                 timeframe TEXT,
                 details TEXT,
                 created_at TEXT,
-                created_by BIGINT
+                created_by BIGINT,
+                source_message_id BIGINT
             )
         """)
         conn.execute("""
@@ -249,6 +300,32 @@ def init_db():
             CREATE TABLE IF NOT EXISTS admin_actions (
                 action_key TEXT PRIMARY KEY,
                 created_at TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS bot_health (
+                component TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                details TEXT DEFAULT ''
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS runtime_errors (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                component TEXT NOT NULL,
+                description TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS delivery_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_message_id BIGINT,
+                user_id BIGINT,
+                status TEXT NOT NULL,
+                error TEXT DEFAULT '',
+                created_at TEXT NOT NULL
             )
         """)
         conn.execute("""
@@ -287,6 +364,15 @@ def init_db():
             conn.execute("ALTER TABLE users ADD COLUMN signals_consent INTEGER DEFAULT -1")
         if "intro_sent" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN intro_sent INTEGER DEFAULT 0")
+        if "favorite_pairs" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN favorite_pairs TEXT DEFAULT ''")
+        if "market" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN market TEXT DEFAULT 'all'")
+        if "timeframe" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN timeframe TEXT DEFAULT '5m'")
+        signal_columns = {row[1] for row in conn.execute("PRAGMA table_info(signals)").fetchall()}
+        if "source_message_id" not in signal_columns:
+            conn.execute("ALTER TABLE signals ADD COLUMN source_message_id BIGINT")
         for admin_id in {OWNER_ID, DEFAULT_ADMIN_ID, *EXTRA_ADMIN_IDS}:
             if admin_id > 0:
                 conn.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (admin_id,))
@@ -460,6 +546,11 @@ main_keyboard = ReplyKeyboardMarkup(
         ],
         [KeyboardButton(text="🤖 АВТОМАТИЧЕСКИЙ БОТ", style="primary")],
         [
+            KeyboardButton(text="📈 МОИ СИГНАЛЫ", style="success"),
+            KeyboardButton(text="⭐ ИЗБРАННОЕ", style="success"),
+        ],
+        [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="success")],
+        [
             KeyboardButton(text="👤 МОЙ ПРОФИЛЬ", style="success"),
             KeyboardButton(text="⚙️ НАСТРОЙКИ", style="success"),
         ],
@@ -495,6 +586,7 @@ def settings_keyboard(enabled):
             colored_button("🇷🇺 Русский", "lang_ru", "primary"),
             colored_button("🇬🇧 English", "lang_en", "primary"),
         ],
+        [colored_button("📈 Рынок и интервал", "user_preferences", "primary")],
         [colored_button("👤 Мой профиль", "profile", "primary")],
     ])
 
@@ -508,6 +600,7 @@ def admin_keyboard():
         [colored_button("🚫 Блокировки", "admin_blocks", "danger")],
         [colored_button("🛡 Администраторы", "admin_manage", "primary")],
         [colored_button("📋 Журнал действий", "admin_audit", "primary")],
+        [colored_button("🩺 Мониторинг", "admin_health", "success")],
         [colored_button("⚙️ Настройки бота", "admin_settings", "primary")],
     ])
 
@@ -516,6 +609,52 @@ def admin_back_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [colored_button("↩️ К панели администратора", "admin_home", "primary")]
     ])
+
+
+def admin_health_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [colored_button("🟢 Состояние ботов", "admin_health_status", "success")],
+        [colored_button("📨 Последний сигнал", "admin_health_signal", "primary")],
+        [colored_button("⚠️ Последние ошибки", "admin_health_errors", "danger")],
+        [colored_button("📬 Доставка сообщений", "admin_health_delivery", "primary")],
+        [colored_button("↩️ К панели администратора", "admin_home", "primary")],
+    ])
+
+
+def user_preferences_keyboard(market, timeframe):
+    markets = [("all", "Все рынки"), ("forex", "Forex"),
+               ("crypto", "Крипто")]
+    market_rows = [[colored_button(
+        ("✅ " if market == value else "") + label,
+        f"market:{value}", "success" if market == value else "primary",
+    ) for value, label in markets[i:i + 2]] for i in range(0, len(markets), 2)]
+    timeframes = [("1m", "1 мин"), ("5m", "5 мин"), ("15m", "15 мин"),
+                  ("30m", "30 мин"), ("1h", "1 час"), ("4h", "4 часа"),
+                  ("1d", "1 день"), ("1w", "1 неделя")]
+    timeframe_rows = [[colored_button(
+        ("✅ " if timeframe == value else "") + label,
+        f"timeframe:{value}", "success" if timeframe == value else "primary",
+    ) for value, label in timeframes[i:i + 4]] for i in range(0, len(timeframes), 4)]
+    return InlineKeyboardMarkup(inline_keyboard=[
+        *market_rows, *timeframe_rows,
+        [colored_button("↩️ Закрыть", "user_preferences", "primary")],
+    ])
+
+
+def favorites_keyboard(favorites):
+    pairs = list(dict.fromkeys((*TRACKED_BINARY_PAIRS, *CRYPTO_PAIRS)))
+    rows = []
+    for index in range(0, len(pairs), 2):
+        row = []
+        for pair in pairs[index:index + 2]:
+            selected = pair in favorites
+            row.append(colored_button(
+                ("⭐ " if selected else "＋ ") + pair,
+                f"favorite_toggle:{pair}", "success" if selected else "primary",
+            ))
+        rows.append(row)
+    rows.append([colored_button("↻ Обновить", "favorites", "primary")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # =========================================================
@@ -1073,27 +1212,29 @@ async def history_handler(message: Message):
     if not await check_user(message):
         return
 
+    since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     with connect_db() as conn:
         channel_rows = conn.execute("""
             SELECT message_id, text, created_at
             FROM source_posts
+            WHERE created_at >= ? OR COALESCE(updated_at, created_at) >= ?
             ORDER BY message_id DESC
-            LIMIT 10
-        """).fetchall()
+            LIMIT 50
+        """, (since, since)).fetchall()
 
         manual_rows = conn.execute("""
             SELECT id, instrument, direction, timeframe, details, created_at
             FROM signals
-            WHERE created_by != 0 OR created_by IS NULL
+            WHERE (created_by != 0 OR created_by IS NULL) AND created_at >= ?
             ORDER BY id DESC
-            LIMIT 10
-        """).fetchall()
+            LIMIT 50
+        """, (since,)).fetchall()
 
     if not channel_rows and not manual_rows:
         await message.answer("🕘 История сигналов пока пуста.")
         return
 
-    text = "🕘 ИСТОРИЯ СИГНАЛОВ\n━━━━━━━━━━━━━━━━━━\n"
+    text = "🕘 ИСТОРИЯ СИГНАЛОВ ЗА 24 ЧАСА\n━━━━━━━━━━━━━━━━━━\n"
 
     for row in channel_rows:
         body = (row[1] or "[Публикация без текста]").strip()
@@ -1197,6 +1338,177 @@ async def profile_handler(message: Message):
 # SETTINGS
 # =========================================================
 
+def show_favorites_text(user_id):
+    user = get_user(user_id)
+    favorites = set(filter(None, (user[9] or "").split(","))) if user else set()
+    return favorites, (
+        "⭐ ИЗБРАННЫЕ ИНСТРУМЕНТЫ\n"
+        "━━━━━━━━━━━━━━━━━━\n\n"
+        "Выберите валютные или криптовалютные пары. Избранное используется "
+        "для персонального списка сигналов.\n\n"
+        f"Выбрано пар: {len(favorites)}"
+    )
+
+
+@user_dp.message(F.text.in_({"⭐ ИЗБРАННОЕ", "⭐ Избранное"}))
+async def favorites_handler(message: Message):
+    if not await check_user(message):
+        return
+    favorites, text = show_favorites_text(message.from_user.id)
+    await message.answer(text, reply_markup=favorites_keyboard(favorites))
+
+
+@user_dp.callback_query(F.data == "favorites")
+async def favorites_refresh_handler(callback: CallbackQuery):
+    user = get_user(callback.from_user.id)
+    if not user or user[3] != "active":
+        await callback.answer("Доступ ограничен.", show_alert=True)
+        return
+    favorites, text = show_favorites_text(callback.from_user.id)
+    await callback.message.edit_text(text, reply_markup=favorites_keyboard(favorites))
+    await callback.answer()
+
+
+@user_dp.callback_query(F.data.startswith("favorite_toggle:"))
+async def favorite_toggle_handler(callback: CallbackQuery):
+    user = get_user(callback.from_user.id)
+    if not user or user[3] != "active":
+        await callback.answer("Доступ ограничен.", show_alert=True)
+        return
+    pair = callback.data.split(":", 1)[1]
+    if pair not in {*TRACKED_BINARY_PAIRS, *CRYPTO_PAIRS}:
+        await callback.answer("Инструмент не найден.", show_alert=True)
+        return
+    favorites = set(filter(None, (user[9] or "").split(",")))
+    if pair in favorites:
+        favorites.remove(pair)
+    else:
+        favorites.add(pair)
+    with connect_db() as conn:
+        conn.execute(
+            "UPDATE users SET favorite_pairs=? WHERE user_id=?",
+            (",".join(sorted(favorites)), callback.from_user.id),
+        )
+    text = (
+        "⭐ ИЗБРАННЫЕ ИНСТРУМЕНТЫ\n━━━━━━━━━━━━━━━━━━\n\n"
+        "Выберите валютные или криптовалютные пары. Избранное используется "
+        "для персонального списка сигналов.\n\n"
+        f"Выбрано пар: {len(favorites)}"
+    )
+    await callback.message.edit_text(text, reply_markup=favorites_keyboard(favorites))
+    await callback.answer("Избранное обновлено.")
+
+
+@user_dp.message(F.text.in_({"📈 МОИ СИГНАЛЫ", "📈 Мои сигналы"}))
+async def my_signals_handler(message: Message):
+    if not await check_user(message):
+        return
+    user = get_user(message.from_user.id)
+    favorites = set(filter(None, (user[9] or "").split(",")))
+    selected_market = user[10] or "all"
+    selected_timeframe = user[11] or "5m"
+    if selected_market == "crypto":
+        favorites.intersection_update(CRYPTO_PAIRS)
+    elif selected_market == "forex":
+        favorites.intersection_update(TRACKED_BINARY_PAIRS)
+    if not favorites:
+        await message.answer(
+            "📈 МОИ СИГНАЛЫ\n━━━━━━━━━━━━━━━━━━\n\n"
+            "Сначала выберите пары в разделе «Избранное».",
+            reply_markup=favorites_keyboard(favorites),
+        )
+        return
+    with connect_db() as conn:
+        source_rows = conn.execute(
+            "SELECT text, created_at FROM source_posts ORDER BY created_at DESC LIMIT 100"
+        ).fetchall()
+        manual_rows = conn.execute(
+            "SELECT instrument, direction, timeframe, details, created_at "
+            "FROM signals WHERE (created_by != 0 OR created_by IS NULL) "
+            "ORDER BY created_at DESC LIMIT 100"
+        ).fetchall()
+    matching = []
+    for text, created_at in source_rows:
+        pairs = extract_pairs(text or "")
+        if pairs.intersection(favorites):
+            matching.append((text, created_at))
+    for instrument, direction, timeframe, details, created_at in manual_rows:
+        timeframe_matches = (timeframe or "").lower() == selected_timeframe.lower()
+        if instrument in favorites and timeframe_matches:
+            matching.append((
+                f"{instrument} · {direction} · {timeframe}\n{details or ''}",
+                created_at,
+            ))
+    matching.sort(key=lambda item: item[1] or "", reverse=True)
+    text = (
+        "📈 МОИ СИГНАЛЫ\n━━━━━━━━━━━━━━━━━━\n"
+        f"Рынок: {selected_market} · Интервал ручных сигналов: {selected_timeframe}\n"
+    )
+    if not matching:
+        text += "\nНовых сигналов по избранным инструментам пока нет."
+    else:
+        for body, created_at in matching[:10]:
+            text += f"\n{signal_result_marker(body)} {created_at or 'время не указано'}\n{html.escape(body[:550])}\n──────────────\n"
+    await message.answer(text[:4000])
+
+
+@user_dp.message(F.text.in_({"🔔 УВЕДОМЛЕНИЯ", "🔔 Уведомления"}))
+async def notifications_handler(message: Message):
+    if not await check_user(message):
+        return
+    user = get_user(message.from_user.id)
+    enabled = bool(user[4])
+    await message.answer(
+        "🔔 УВЕДОМЛЕНИЯ\n━━━━━━━━━━━━━━━━━━\n\n"
+        + ("Оповещения о новых сигналах включены." if enabled else "Оповещения о новых сигналах выключены."),
+        reply_markup=settings_keyboard(enabled),
+    )
+
+
+def preferences_text(user):
+    markets = {"all": "Все рынки", "forex": "Forex", "crypto": "Крипто"}
+    return (
+        "⚙️ РЫНОК И ИНТЕРВАЛ\n━━━━━━━━━━━━━━━━━━\n\n"
+        f"Рынок: {markets.get(user[10] or 'all', 'Все рынки')}\n"
+        f"Интервал: {user[11] or '5m'}\n\nВыберите параметры ниже."
+    )
+
+
+@user_dp.callback_query(F.data == "user_preferences")
+async def user_preferences_handler(callback: CallbackQuery):
+    user = get_user(callback.from_user.id)
+    if not user or user[3] != "active":
+        await callback.answer("Доступ ограничен.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        preferences_text(user),
+        reply_markup=user_preferences_keyboard(user[10] or "all", user[11] or "5m"),
+    )
+    await callback.answer()
+
+
+@user_dp.callback_query(F.data.startswith("market:") | F.data.startswith("timeframe:"))
+async def user_preference_update_handler(callback: CallbackQuery):
+    user = get_user(callback.from_user.id)
+    if not user or user[3] != "active":
+        await callback.answer("Доступ ограничен.", show_alert=True)
+        return
+    kind, value = callback.data.split(":", 1)
+    allowed = {"market": {"all", "forex", "crypto"},
+               "timeframe": {"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}}
+    if value not in allowed[kind]:
+        await callback.answer("Параметр не поддерживается.", show_alert=True)
+        return
+    column = "market" if kind == "market" else "timeframe"
+    with connect_db() as conn:
+        conn.execute(f"UPDATE users SET {column}=? WHERE user_id=?", (value, callback.from_user.id))
+    user = get_user(callback.from_user.id)
+    await callback.message.edit_text(
+        preferences_text(user),
+        reply_markup=user_preferences_keyboard(user[10] or "all", user[11] or "5m"),
+    )
+    await callback.answer("Настройки сохранены.")
+
 @user_dp.message(F.text.in_({"⚙️ НАСТРОЙКИ", "⚙️ Настройки"}))
 async def settings_handler(message: Message):
     if not await check_user(message):
@@ -1228,9 +1540,16 @@ async def toggle_notifications(callback: CallbackQuery):
         )
 
     user = get_user(callback.from_user.id)
-    await callback.message.edit_reply_markup(
-        reply_markup=settings_keyboard(bool(user[4]))
-    )
+    if "УВЕДОМЛЕНИЯ" in (callback.message.text or "").upper():
+        await callback.message.edit_text(
+            "🔔 УВЕДОМЛЕНИЯ\n━━━━━━━━━━━━━━━━━━\n\n"
+            + ("Оповещения о новых сигналах включены." if enabled else "Оповещения о новых сигналах выключены."),
+            reply_markup=settings_keyboard(bool(user[4])),
+        )
+    else:
+        await callback.message.edit_reply_markup(
+            reply_markup=settings_keyboard(bool(user[4]))
+        )
     await callback.answer(
         "Уведомления включены." if enabled else "Уведомления отключены."
     )
@@ -1306,8 +1625,8 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
             if inserted:
                 conn.execute("""
                     INSERT INTO signals
-                    (instrument, direction, timeframe, details, created_at, created_by)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    (instrument, direction, timeframe, details, created_at, created_by, source_message_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (
                     "Публикация",
                     "Источник",
@@ -1315,11 +1634,13 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                     post_text[:3000],
                     posted_at,
                     0,
+                    message.message_id,
                 ))
             else:
                 log.info("Resuming undelivered recipients for source post %s.", message.message_id)
     except sqlite3.Error:
         log.exception("Could not save source-channel entry.")
+        record_runtime_error("source_post_storage", "Could not save source-channel entry")
         return
 
     with connect_db() as conn:
@@ -1353,9 +1674,15 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                     "(source_message_id, user_id, copied_message_id) VALUES (?, ?, ?)",
                     (message.message_id, user_id, copied.message_id),
                 )
+            record_delivery(message.message_id, user_id, "sent")
             sent += 1
         except TelegramAPIError as error:
             failed += 1
+            try:
+                record_delivery(message.message_id, user_id, "failed", error)
+                record_runtime_error("signal_delivery", error)
+            except Exception:
+                log.exception("Could not record failed delivery")
             log.warning(
                 "Could not deliver channel post to user %s: %s",
                 user_id,
@@ -1363,6 +1690,12 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
             )
         except sqlite3.Error:
             failed += 1
+            error = "Could not record source delivery"
+            try:
+                record_delivery(message.message_id, user_id, "failed", error)
+                record_runtime_error("signal_delivery", error)
+            except Exception:
+                log.exception("Could not record failed delivery")
             log.exception("Could not record source delivery for user %s", user_id)
 
     await asyncio.gather(*(deliver(user_id) for (user_id,) in recipients))
@@ -1403,6 +1736,7 @@ async def signals_pro_edited_handler(message: Message, bot: Bot):
             await asyncio.sleep(0.05)
         except TelegramBadRequest as error:
             if "message is not modified" not in str(error).lower():
+                record_runtime_error("signal_edit", error)
                 log.warning("Could not edit forwarded post for %s: %s", user_id, error)
         except TelegramAPIError:
             log.exception("Could not update forwarded post for user %s", user_id)
@@ -1577,8 +1911,8 @@ async def publish_signal(message: Message, bot: Bot):
     with connect_db() as conn:
         cursor = conn.execute("""
             INSERT INTO signals
-            (instrument, direction, timeframe, details, created_at, created_by)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (instrument, direction, timeframe, details, created_at, created_by, source_message_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """ + (" RETURNING id" if DATABASE_URL else ""), (
             instrument,
             direction,
@@ -1586,6 +1920,7 @@ async def publish_signal(message: Message, bot: Bot):
             details,
             now(),
             message.from_user.id,
+            message.message_id,
         ))
         signal_id = cursor.fetchone()[0] if DATABASE_URL else cursor.lastrowid
 
@@ -1613,10 +1948,16 @@ async def publish_signal(message: Message, bot: Bot):
     for (user_id,) in recipients:
         try:
             await USER_BOT.send_message(user_id, text)
+            record_delivery(message.message_id, user_id, "sent")
             sent += 1
             await asyncio.sleep(0.05)
-        except TelegramAPIError:
+        except TelegramAPIError as error:
             failed += 1
+            try:
+                record_delivery(message.message_id, user_id, "failed", error)
+                record_runtime_error("manual_signal_delivery", error)
+            except Exception:
+                log.exception("Could not record manual signal delivery failure")
 
     audit(message.from_user.id, "publish_signal", signal_id)
 
@@ -1670,10 +2011,13 @@ async def broadcast(message: Message, bot: Bot):
     for (user_id,) in users:
         try:
             await delivery_bot.send_message(user_id, html.escape(parts[1]))
+            record_delivery(message.message_id, user_id, "sent")
             sent += 1
             await asyncio.sleep(0.05)
-        except TelegramAPIError:
+        except TelegramAPIError as error:
             failed += 1
+            record_delivery(message.message_id, user_id, "failed", error)
+            record_runtime_error("broadcast_delivery", error)
 
     audit(message.from_user.id, "broadcast")
 
@@ -1701,10 +2045,13 @@ async def admin_reply(message: Message):
             target_id,
             "📩 <b>Ответ поддержки QUANTUM TRADE AI</b>\n\n" + html.escape(parts[2]),
         )
+        record_delivery(message.message_id, target_id, "sent")
         audit(message.from_user.id, "support_reply", target_id)
         await message.answer("✅ Ответ отправлен пользователю.")
-    except TelegramAPIError:
+    except TelegramAPIError as error:
         log.exception("Could not send admin reply to user %s", target_id)
+        record_delivery(message.message_id, target_id, "failed", error)
+        record_runtime_error("support_reply", error)
         await message.answer("Не удалось доставить ответ. Пользователь мог заблокировать бота.")
 
 
@@ -1884,6 +2231,129 @@ async def admin_buttons(callback: CallbackQuery):
         await callback.answer()
         return
 
+    if data == "admin_health":
+        await callback.message.edit_text(
+            "🩺 МОНИТОРИНГ БОТОВ\n━━━━━━━━━━━━━━━━━━\n\nВыберите раздел:",
+            reply_markup=admin_health_keyboard(),
+        )
+        await callback.answer()
+        return
+
+    if data == "admin_health_status":
+        try:
+            with connect_db() as conn:
+                rows = conn.execute(
+                    "SELECT component, status, last_seen, details FROM bot_health "
+                    "ORDER BY component"
+                ).fetchall()
+            current_time = datetime.now(timezone.utc)
+            labels = {
+                "user_bot": "Пользовательский бот",
+                "admin_bot": "Админ-бот",
+                "database": "База данных",
+            }
+            lines = ["🟢 СОСТОЯНИЕ СЕРВИСОВ", "━━━━━━━━━━━━━━━━━━"]
+            for component, status, last_seen, details in rows:
+                try:
+                    seen = datetime.fromisoformat(last_seen)
+                    if seen.tzinfo is None:
+                        seen = seen.replace(tzinfo=timezone.utc)
+                    is_fresh = (current_time - seen).total_seconds() <= 90
+                except (TypeError, ValueError):
+                    is_fresh = False
+                online = status == "online" and is_fresh
+                lines.append(
+                    f"\n{'🟢' if online else '🔴'} {labels.get(component, component)}: "
+                    f"{'активен' if online else 'нет свежего сигнала'}"
+                )
+                lines.append(f"Последняя отметка: {last_seen[:19] if last_seen else '—'} UTC")
+                if details:
+                    lines.append(html.escape(details))
+            if not rows:
+                lines.append("\nНет отметок мониторинга. Перезапустите процесс бота.")
+        except Exception as error:
+            log.exception("Could not load bot health status")
+            lines = ["🔴 Не удалось проверить базу данных.", html.escape(str(error)[:300])]
+        await callback.message.edit_text(
+            "\n".join(lines), reply_markup=admin_health_keyboard()
+        )
+
+    elif data == "admin_health_signal":
+        with connect_db() as conn:
+            signal = conn.execute(
+                "SELECT instrument, direction, timeframe, details, created_at, source_message_id "
+                "FROM signals ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            delivery = None
+            if signal and signal[5] is not None:
+                delivery = conn.execute(
+                    "SELECT SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END), "
+                    "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END), "
+                    "MAX(created_at) FROM delivery_events WHERE source_message_id=?",
+                    (signal[5],),
+                ).fetchone()
+        lines = ["📨 ПОСЛЕДНИЙ СИГНАЛ", "━━━━━━━━━━━━━━━━━━"]
+        if signal:
+            lines.extend([
+                f"\nИнструмент: {html.escape(signal[0] or 'Публикация')}",
+                f"Направление: {html.escape(signal[1] or '—')}",
+                f"Интервал: {html.escape(signal[2] or '—')}",
+                f"Время: {html.escape(signal[4] or '—')} UTC",
+                f"Текст: {html.escape((signal[3] or '')[:700])}",
+            ])
+        else:
+            lines.append("\nСигналов пока нет.")
+        if delivery and delivery[2]:
+            lines.append(
+                f"\nДоставка сигнала: ✅ {delivery[0] or 0} · "
+                f"❌ {delivery[1] or 0} · последняя попытка {delivery[2]} UTC"
+            )
+        else:
+            lines.append("\nПо этому сигналу ещё нет записанных попыток доставки.")
+        await callback.message.edit_text(
+            "\n".join(lines), reply_markup=admin_health_keyboard()
+        )
+
+    elif data == "admin_health_errors":
+        with connect_db() as conn:
+            rows = conn.execute(
+                "SELECT component, description, created_at FROM runtime_errors "
+                "ORDER BY id DESC LIMIT 8"
+            ).fetchall()
+        text = "⚠️ ПОСЛЕДНИЕ ОШИБКИ\n━━━━━━━━━━━━━━━━━━\n"
+        for component, description, created_at in rows:
+            text += (
+                f"\n{created_at[:19]} UTC · {html.escape(component)}\n"
+                f"{html.escape(description[:400])}\n──────────────\n"
+            )
+        if not rows:
+            text += "\nСохранённых ошибок пока нет."
+        await callback.message.edit_text(
+            text[:3900], reply_markup=admin_health_keyboard()
+        )
+
+    elif data == "admin_health_delivery":
+        since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        with connect_db() as conn:
+            sent, failed = conn.execute(
+                "SELECT SUM(CASE WHEN status='sent' THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) "
+                "FROM delivery_events WHERE created_at >= ?", (since,),
+            ).fetchone()
+            retries = conn.execute(
+                "SELECT COALESCE(SUM(attempts - 1), 0) FROM ("
+                "SELECT COUNT(*) AS attempts FROM delivery_events "
+                "WHERE created_at >= ? GROUP BY source_message_id, user_id "
+                "HAVING COUNT(*) > 1)", (since,),
+            ).fetchone()[0]
+        await callback.message.edit_text(
+            "📬 ДОСТАВКА СООБЩЕНИЙ · 24 ЧАСА\n━━━━━━━━━━━━━━━━━━\n\n"
+            f"✅ Отправлено: {sent or 0}\n"
+            f"🔁 Повторных попыток: {retries or 0}\n"
+            f"❌ Сбоев: {failed or 0}",
+            reply_markup=admin_health_keyboard(),
+        )
+
     if data == "admin_stats":
         with connect_db() as conn:
             total = conn.execute(
@@ -2051,6 +2521,23 @@ async def main():
                 await fetch_and_store_news()
                 await asyncio.sleep(NEWS_POLL_SECONDS)
 
+        for component, details in (
+            ("user_bot", f"@{user_info.username}"),
+            ("admin_bot", f"@{admin_info.username}"),
+            ("database", "PostgreSQL" if DATABASE_URL else "SQLite"),
+        ):
+            set_health(component, "online", details)
+
+        async def health_refresh_worker():
+            while True:
+                await asyncio.sleep(30)
+                try:
+                    set_health("user_bot", "online", f"@{user_info.username}")
+                    set_health("admin_bot", "online", f"@{admin_info.username}")
+                    set_health("database", "online", "Соединение проверено heartbeat-записью")
+                except Exception:
+                    log.exception("Bot health heartbeat failed")
+
         pollers = [
             user_dp.start_polling(
                 user_bot,
@@ -2062,18 +2549,26 @@ async def main():
                 allowed_updates=admin_dp.resolve_used_update_types(),
                 close_bot_session=False,
             ),
+            health_refresh_worker(),
         ]
         if NEWS_REPUBLISH_ALLOWED:
             pollers.append(news_refresh_worker())
         await asyncio.gather(*pollers)
     except TelegramConflictError:
         log.exception("Polling conflict: another instance is already using one of these bot tokens.")
+        record_runtime_error("polling_conflict", "Another instance is already using one of these bot tokens")
         raise
-    except Exception:
+    except Exception as error:
         log.exception("Fatal bot runtime error")
+        record_runtime_error("bot_runtime", error)
         raise
 
     finally:
+        try:
+            for component in ("user_bot", "admin_bot", "database"):
+                set_health(component, "offline", "Процесс остановлен")
+        except Exception:
+            log.exception("Could not mark bot services offline")
         await user_bot.session.close()
         await admin_bot.session.close()
 
