@@ -1069,7 +1069,6 @@ RU_EN_TRANSLATIONS = {
     "Источник реальных котировок пока не подключён.": "A live price feed is not connected yet.",
     "Криптопары к USDT": "CRYPTO PAIRS AGAINST USDT",
     "В сохранённых публикациях пока не найдено сигналов с распознанными валютными парами.": "No signals with recognized currency pairs were found in saved posts.",
-    "из": "of",
     "сигнал(ов)": "signal(s)",
     "сообщ.": "messages",
     "Без текста": "No text",
