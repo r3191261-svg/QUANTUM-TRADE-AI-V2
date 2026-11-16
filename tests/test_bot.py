@@ -196,7 +196,7 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
     async def test_binary_menu_hides_crypto_list_and_exposes_binary_signals(self):
         labels = [row[0].text for row in bot.binary_menu_keyboard().inline_keyboard]
         self.assertNotIn("₿ СПИСОК КРИПТОПАР", labels)
-        self.assertIn("📈 СИГНАЛЫ БИНАРНЫХ ОПЦИОНОВ", labels)
+        self.assertIn("📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", labels)
 
     async def test_user_crypto_pair_list_matches_requested_twenty_pairs(self):
         callback = FakeCallback("crypto_pairs")
