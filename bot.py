@@ -547,7 +547,6 @@ main_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="🤖 АВТОМАТИЧЕСКИЙ БОТ", style="primary")],
         [
             KeyboardButton(text="📈 МОИ СИГНАЛЫ", style="success"),
-            KeyboardButton(text="⭐ ИЗБРАННОЕ", style="success"),
         ],
         [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="success")],
         [
@@ -586,7 +585,6 @@ def settings_keyboard(enabled):
             colored_button("🇷🇺 Русский", "lang_ru", "primary"),
             colored_button("🇬🇧 English", "lang_en", "primary"),
         ],
-        [colored_button("📈 Рынок и интервал", "user_preferences", "primary")],
         [colored_button("👤 Мой профиль", "profile", "primary")],
     ])
 
@@ -619,42 +617,6 @@ def admin_health_keyboard():
         [colored_button("📬 Доставка сообщений", "admin_health_delivery", "primary")],
         [colored_button("↩️ К панели администратора", "admin_home", "primary")],
     ])
-
-
-def user_preferences_keyboard(market, timeframe):
-    markets = [("all", "Все рынки"), ("forex", "Forex"),
-               ("crypto", "Крипто")]
-    market_rows = [[colored_button(
-        ("✅ " if market == value else "") + label,
-        f"market:{value}", "success" if market == value else "primary",
-    ) for value, label in markets[i:i + 2]] for i in range(0, len(markets), 2)]
-    timeframes = [("1m", "1 мин"), ("5m", "5 мин"), ("15m", "15 мин"),
-                  ("30m", "30 мин"), ("1h", "1 час"), ("4h", "4 часа"),
-                  ("1d", "1 день"), ("1w", "1 неделя")]
-    timeframe_rows = [[colored_button(
-        ("✅ " if timeframe == value else "") + label,
-        f"timeframe:{value}", "success" if timeframe == value else "primary",
-    ) for value, label in timeframes[i:i + 4]] for i in range(0, len(timeframes), 4)]
-    return InlineKeyboardMarkup(inline_keyboard=[
-        *market_rows, *timeframe_rows,
-        [colored_button("↩️ Закрыть", "user_preferences", "primary")],
-    ])
-
-
-def favorites_keyboard(favorites):
-    pairs = list(dict.fromkeys((*TRACKED_BINARY_PAIRS, *CRYPTO_PAIRS)))
-    rows = []
-    for index in range(0, len(pairs), 2):
-        row = []
-        for pair in pairs[index:index + 2]:
-            selected = pair in favorites
-            row.append(colored_button(
-                ("⭐ " if selected else "＋ ") + pair,
-                f"favorite_toggle:{pair}", "success" if selected else "primary",
-            ))
-        rows.append(row)
-    rows.append([colored_button("↻ Обновить", "favorites", "primary")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # =========================================================
@@ -1164,24 +1126,6 @@ def signal_result_marker(details):
     return "⏳"
 
 
-def normalize_timeframe(value):
-    compact = re.sub(r"[^A-ZА-ЯЁ0-9]", "", (value or "").upper())
-    aliases = {
-        "1m": ("M1", "1M", "1МИН", "1МИНУТА", "1МИНУТУ", "1MIN", "1MINUTE"),
-        "15m": ("M15", "15M", "15МИН", "15МИНУТ", "15MIN", "15MINUTES"),
-        "30m": ("M30", "30M", "30МИН", "30МИНУТ", "30MIN", "30MINUTES"),
-        "5m": ("M5", "5M", "5МИН", "5МИНУТ", "5МИНУТА", "5MIN", "5MINUTES"),
-        "1h": ("H1", "1H", "1ЧАС", "1ЧАСА", "1HOUR"),
-        "4h": ("H4", "4H", "4ЧАС", "4ЧАСА", "4HOURS"),
-        "1d": ("D1", "1D", "1ДЕНЬ", "1DAY"),
-        "1w": ("W1", "1W", "1НЕДЕЛЯ", "1WEEK"),
-    }
-    for timeframe, tokens in aliases.items():
-        if any(token in compact for token in tokens):
-            return timeframe
-    return None
-
-
 @user_dp.message(F.text.in_({"📊 СТАТИСТИКА", "📈 Статистика"}))
 async def statistics_handler(message: Message):
     if not await check_user(message):
@@ -1356,85 +1300,9 @@ async def profile_handler(message: Message):
 # SETTINGS
 # =========================================================
 
-def show_favorites_text(user_id):
-    user = get_user(user_id)
-    favorites = set(filter(None, (user[9] or "").split(","))) if user else set()
-    return favorites, (
-        "⭐ ИЗБРАННЫЕ ИНСТРУМЕНТЫ\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        "Выберите валютные или криптовалютные пары. Избранное используется "
-        "для персонального списка сигналов.\n\n"
-        f"Выбрано пар: {len(favorites)}"
-    )
-
-
-@user_dp.message(F.text.in_({"⭐ ИЗБРАННОЕ", "⭐ Избранное"}))
-async def favorites_handler(message: Message):
-    if not await check_user(message):
-        return
-    favorites, text = show_favorites_text(message.from_user.id)
-    await message.answer(text, reply_markup=favorites_keyboard(favorites))
-
-
-@user_dp.callback_query(F.data == "favorites")
-async def favorites_refresh_handler(callback: CallbackQuery):
-    user = get_user(callback.from_user.id)
-    if not user or user[3] != "active":
-        await callback.answer("Доступ ограничен.", show_alert=True)
-        return
-    favorites, text = show_favorites_text(callback.from_user.id)
-    await callback.message.edit_text(text, reply_markup=favorites_keyboard(favorites))
-    await callback.answer()
-
-
-@user_dp.callback_query(F.data.startswith("favorite_toggle:"))
-async def favorite_toggle_handler(callback: CallbackQuery):
-    user = get_user(callback.from_user.id)
-    if not user or user[3] != "active":
-        await callback.answer("Доступ ограничен.", show_alert=True)
-        return
-    pair = callback.data.split(":", 1)[1]
-    if pair not in {*TRACKED_BINARY_PAIRS, *CRYPTO_PAIRS}:
-        await callback.answer("Инструмент не найден.", show_alert=True)
-        return
-    favorites = set(filter(None, (user[9] or "").split(",")))
-    if pair in favorites:
-        favorites.remove(pair)
-    else:
-        favorites.add(pair)
-    with connect_db() as conn:
-        conn.execute(
-            "UPDATE users SET favorite_pairs=? WHERE user_id=?",
-            (",".join(sorted(favorites)), callback.from_user.id),
-        )
-    text = (
-        "⭐ ИЗБРАННЫЕ ИНСТРУМЕНТЫ\n━━━━━━━━━━━━━━━━━━\n\n"
-        "Выберите валютные или криптовалютные пары. Избранное используется "
-        "для персонального списка сигналов.\n\n"
-        f"Выбрано пар: {len(favorites)}"
-    )
-    await callback.message.edit_text(text, reply_markup=favorites_keyboard(favorites))
-    await callback.answer("Избранное обновлено.")
-
-
 @user_dp.message(F.text.in_({"📈 МОИ СИГНАЛЫ", "📈 Мои сигналы"}))
 async def my_signals_handler(message: Message):
     if not await check_user(message):
-        return
-    user = get_user(message.from_user.id)
-    favorites = set(filter(None, (user[9] or "").split(",")))
-    selected_market = user[10] or "all"
-    selected_timeframe = user[11] or "5m"
-    if selected_market == "crypto":
-        favorites.intersection_update(CRYPTO_PAIRS)
-    elif selected_market == "forex":
-        favorites.intersection_update(TRACKED_BINARY_PAIRS)
-    if not favorites:
-        await message.answer(
-            "📈 МОИ СИГНАЛЫ\n━━━━━━━━━━━━━━━━━━\n\n"
-            "Сначала выберите пары в разделе «Избранное».",
-            reply_markup=favorites_keyboard(favorites),
-        )
         return
     with connect_db() as conn:
         source_rows = conn.execute(
@@ -1447,20 +1315,16 @@ async def my_signals_handler(message: Message):
         ).fetchall()
     matching = []
     for text, created_at in source_rows:
-        pairs = extract_pairs(text or "")
-        if pairs.intersection(favorites) and normalize_timeframe(text) == selected_timeframe:
-            matching.append((text, created_at))
+        matching.append((text, created_at))
     for instrument, direction, timeframe, details, created_at in manual_rows:
-        timeframe_matches = normalize_timeframe(timeframe) == selected_timeframe
-        if instrument in favorites and timeframe_matches:
-            matching.append((
-                f"{instrument} · {direction} · {timeframe}\n{details or ''}",
-                created_at,
-            ))
+        matching.append((
+            f"{instrument} · {direction} · {timeframe}\n{details or ''}",
+            created_at,
+        ))
     matching.sort(key=lambda item: item[1] or "", reverse=True)
     text = (
         "📈 МОИ СИГНАЛЫ\n━━━━━━━━━━━━━━━━━━\n"
-        f"Рынок: {selected_market} · Интервал ручных сигналов: {selected_timeframe}\n"
+        "Последние опубликованные сигналы\n"
     )
     if not matching:
         text += "\nСигналов с выбранными парами и интервалом пока нет."
@@ -1482,56 +1346,6 @@ async def notifications_handler(message: Message):
         reply_markup=settings_keyboard(enabled),
     )
 
-
-def preferences_text(user):
-    markets = {"all": "Все рынки", "forex": "Forex", "crypto": "Крипто"}
-    intervals = {"1m": "1 мин", "5m": "5 мин", "15m": "15 мин", "30m": "30 мин",
-                 "1h": "1 час", "4h": "4 часа", "1d": "1 день", "1w": "1 неделя"}
-    return (
-        "⚙️ ФИЛЬТР МОИХ СИГНАЛОВ\n━━━━━━━━━━━━━━━━━━\n\n"
-        f"Рынок: {markets.get(user[10] or 'all', 'Все рынки')}\n"
-        f"Интервал: {intervals.get(user[11] or '5m', user[11] or '5 мин')}\n\n"
-        "Эти параметры фильтруют раздел «Мои сигналы»: рынок ограничивает список "
-        "избранных инструментов, а интервал оставляет сигналы с совпадающим "
-        "таймфреймом. Публикации без указанного таймфрейма в этот список не попадут.\n\n"
-        "Выберите параметры ниже."
-    )
-
-
-@user_dp.callback_query(F.data == "user_preferences")
-async def user_preferences_handler(callback: CallbackQuery):
-    user = get_user(callback.from_user.id)
-    if not user or user[3] != "active":
-        await callback.answer("Доступ ограничен.", show_alert=True)
-        return
-    await callback.message.edit_text(
-        preferences_text(user),
-        reply_markup=user_preferences_keyboard(user[10] or "all", user[11] or "5m"),
-    )
-    await callback.answer()
-
-
-@user_dp.callback_query(F.data.startswith("market:") | F.data.startswith("timeframe:"))
-async def user_preference_update_handler(callback: CallbackQuery):
-    user = get_user(callback.from_user.id)
-    if not user or user[3] != "active":
-        await callback.answer("Доступ ограничен.", show_alert=True)
-        return
-    kind, value = callback.data.split(":", 1)
-    allowed = {"market": {"all", "forex", "crypto"},
-               "timeframe": {"1m", "5m", "15m", "30m", "1h", "4h", "1d", "1w"}}
-    if value not in allowed[kind]:
-        await callback.answer("Параметр не поддерживается.", show_alert=True)
-        return
-    column = "market" if kind == "market" else "timeframe"
-    with connect_db() as conn:
-        conn.execute(f"UPDATE users SET {column}=? WHERE user_id=?", (value, callback.from_user.id))
-    user = get_user(callback.from_user.id)
-    await callback.message.edit_text(
-        preferences_text(user),
-        reply_markup=user_preferences_keyboard(user[10] or "all", user[11] or "5m"),
-    )
-    await callback.answer("Настройки сохранены.")
 
 @user_dp.message(F.text.in_({"⚙️ НАСТРОЙКИ", "⚙️ Настройки"}))
 async def settings_handler(message: Message):
