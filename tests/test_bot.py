@@ -189,9 +189,9 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registration.text, "📝 Регистрация у брокера")
         self.assertEqual(support.text, "🤖 Подключить автоторговлю")
         self.assertEqual(support.url, bot.SUPPORT_URL)
-        self.assertIn("text=", support.url)
-        self.assertEqual(bot.SUPPORT_MESSAGE, "Здравствуйте! 🤝 Хочу подключить автоторговлю!")
-        self.assertIn(bot.SUPPORT_MESSAGE, text)
+        self.assertEqual(support.url, "https://t.me/copy_broker_BO_bot")
+        self.assertNotIn("готовое сообщение", text.lower())
+        self.assertNotIn("Здравствуйте! 🤝 Хочу подключить автоторговлю!", text)
         self.assertNotIn("отправьте администратору сообщение", text.lower())
 
     async def test_binary_menu_hides_crypto_list_and_exposes_binary_signals(self):
