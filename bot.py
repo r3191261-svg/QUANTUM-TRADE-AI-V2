@@ -1123,6 +1123,10 @@ class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
                 if language == "en":
                     value = translate_to_english(value)
                 rendered = render_custom_emojis(value)
+                # Telegram has no font-size control for bot messages. Use
+                # bold as the consistent, readable text treatment requested.
+                if "<code" not in rendered.lower() and "<pre" not in rendered.lower():
+                    rendered = f"<b>{rendered}</b>"
                 if rendered != getattr(method, field, None):
                     setattr(method, field, rendered)
                     method.parse_mode = ParseMode.HTML
