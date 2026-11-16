@@ -189,7 +189,7 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(registration.text, "📝 Регистрация у брокера")
         self.assertEqual(support.text, "🤖 Подключить автоторговлю")
         self.assertEqual(support.url, bot.SUPPORT_URL)
-        self.assertEqual(support.url, "https://t.me/copy_broker_BO_bot")
+        self.assertIn("https://t.me/copy_broker_BO_bot?text=", support.url)
         self.assertNotIn("готовое сообщение", text.lower())
         self.assertNotIn("Здравствуйте! 🤝 Хочу подключить автоторговлю!", text)
         self.assertNotIn("отправьте администратору сообщение", text.lower())

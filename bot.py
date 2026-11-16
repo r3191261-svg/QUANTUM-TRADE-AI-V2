@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import threading
+from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 
@@ -30,6 +31,7 @@ from aiogram.types import (
     ErrorEvent,
 )
 from aiogram.exceptions import TelegramAPIError, TelegramConflictError, TelegramBadRequest
+from aiogram.client.session.middlewares.base import BaseRequestMiddleware
 
 
 # =========================================================
@@ -68,7 +70,8 @@ NEWS_RSS_URL = os.getenv("NEWS_RSS_URL", "").strip() or "https://www.investing.c
 NEWS_POLL_SECONDS = max(60, int(os.getenv("NEWS_POLL_SECONDS", "").strip() or "300"))
 NEWS_LIMIT = 100
 NEWS_REPUBLISH_ALLOWED = os.getenv("NEWS_REPUBLISH_ALLOWED", "false").strip().lower() == "true"
-SUPPORT_URL = "https://t.me/copy_broker_BO_bot"
+AUTOTRADE_DRAFT = "Здравствуйте! 🤝 Хочу подключить автоторговлю!"
+SUPPORT_URL = "https://t.me/copy_broker_BO_bot?text=" + quote(AUTOTRADE_DRAFT)
 REGISTRATION_URL = "https://clck.ru/3X2xAM"
 LOCAL_TZ = timezone(timedelta(hours=5), "Asia/Tashkent")
 
@@ -86,7 +89,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif")
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
 CUSTOM_EMOJI_PACK_NAME = os.getenv(
-    "CUSTOM_EMOJI_PACK_NAME", "VajbkodimHttpstmeZEWopnLV4Ig5Njky"
+    "CUSTOM_EMOJI_PACK_NAME", "AR_PREMIUM"
 ).strip()
 _CUSTOM_EMOJI_PACK = None
 
@@ -584,11 +587,6 @@ def signal_action_keyboard():
             url=SUPPORT_URL,
             style="success",
         )],
-        [InlineKeyboardButton(
-            text="✉️ Написать администратору",
-            callback_data="support_admin",
-            style="primary",
-        )],
     ])
 
 
@@ -764,22 +762,101 @@ async def custom_emoji_markup(bot, fallback_emoji):
     """Return an animated custom-emoji entity from the configured public pack."""
     global _CUSTOM_EMOJI_PACK
     if _CUSTOM_EMOJI_PACK is None:
-        _CUSTOM_EMOJI_PACK = {}
-        try:
-            sticker_set = await bot.get_sticker_set(CUSTOM_EMOJI_PACK_NAME)
-            for sticker in sticker_set.stickers:
-                custom_id = getattr(sticker, "custom_emoji_id", None)
-                if custom_id:
-                    _CUSTOM_EMOJI_PACK[sticker.emoji or fallback_emoji] = custom_id
-        except Exception:
-            log.exception("Could not load custom emoji pack %s", CUSTOM_EMOJI_PACK_NAME)
+        await setup_custom_emojis(bot)
 
     custom_id = _CUSTOM_EMOJI_PACK.get(fallback_emoji)
-    if not custom_id and _CUSTOM_EMOJI_PACK:
-        custom_id = next(iter(_CUSTOM_EMOJI_PACK.values()))
     if not custom_id:
         return fallback_emoji
     return f'<tg-emoji emoji-id="{custom_id}">{html.escape(fallback_emoji)}</tg-emoji>'
+
+
+async def setup_custom_emojis(bot):
+    """Load the configured emoji pack and install outgoing message decoration."""
+    global _CUSTOM_EMOJI_PACK
+    if not any(isinstance(item, CustomEmojiRequestMiddleware) for item in bot.session.middleware):
+        bot.session.middleware.register(CustomEmojiRequestMiddleware())
+    if _CUSTOM_EMOJI_PACK is not None:
+        return
+    _CUSTOM_EMOJI_PACK = {}
+    try:
+        sticker_set = await bot.get_sticker_set(CUSTOM_EMOJI_PACK_NAME)
+        for sticker in sticker_set.stickers:
+            custom_id = getattr(sticker, "custom_emoji_id", None)
+            if custom_id:
+                _CUSTOM_EMOJI_PACK[sticker.emoji or ""] = custom_id
+        log.info("Loaded %d custom emojis from %s", len(_CUSTOM_EMOJI_PACK), CUSTOM_EMOJI_PACK_NAME)
+    except Exception:
+        log.exception("Could not load custom emoji pack %s", CUSTOM_EMOJI_PACK_NAME)
+        _CUSTOM_EMOJI_PACK = {}
+
+
+def render_custom_emojis(text):
+    """Replace pack emoji in HTML messages with Telegram custom emoji entities."""
+    if not text or not _CUSTOM_EMOJI_PACK:
+        return text
+    protected = []
+
+    def protect(match):
+        protected.append(match.group(0))
+        return f"\x00CUSTOM_EMOJI_{len(protected) - 1}\x00"
+
+    text = re.sub(r"<tg-emoji\b[^>]*>.*?</tg-emoji>", protect, text, flags=re.S)
+    emoji_map = {}
+    for emoji, custom_id in _CUSTOM_EMOJI_PACK.items():
+        if emoji and custom_id:
+            emoji_map[emoji] = custom_id
+    if not emoji_map:
+        return text
+    emoji_pattern = re.compile("|".join(re.escape(item) for item in sorted(emoji_map, key=len, reverse=True)))
+    text = emoji_pattern.sub(
+        lambda match: (
+            f'<tg-emoji emoji-id="{emoji_map[match.group(0)]}">'
+            f'{html.escape(match.group(0))}</tg-emoji>'
+        ),
+        text,
+    )
+    for index, block in enumerate(protected):
+        text = text.replace(f"\x00CUSTOM_EMOJI_{index}\x00", block)
+    return text
+
+
+def apply_custom_button_icons(reply_markup):
+    """Use the selected custom emoji as Telegram button icons when available."""
+    if not reply_markup or not _CUSTOM_EMOJI_PACK:
+        return
+    keyboard = getattr(reply_markup, "inline_keyboard", None) or getattr(reply_markup, "keyboard", None)
+    if not keyboard:
+        return
+    for row in keyboard:
+        for button in row:
+            if getattr(button, "icon_custom_emoji_id", None):
+                continue
+            label = getattr(button, "text", "") or ""
+            for emoji in sorted(_CUSTOM_EMOJI_PACK, key=len, reverse=True):
+                if emoji and emoji in label:
+                    try:
+                        button.icon_custom_emoji_id = _CUSTOM_EMOJI_PACK[emoji]
+                        if getattr(button, "callback_data", None) or getattr(button, "url", None):
+                            button.text = label.replace(emoji, "", 1).lstrip()
+                    except Exception:
+                        pass
+                    break
+
+
+class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
+    """Apply the configured premium emoji pack consistently to outgoing messages."""
+
+    async def __call__(self, make_request, bot, method):
+        for field in ("text", "caption"):
+            value = getattr(method, field, None)
+            entities_field = "caption_entities" if field == "caption" else "entities"
+            if value and hasattr(method, "parse_mode") and not getattr(method, entities_field, None):
+                rendered = render_custom_emojis(value)
+                if rendered != value:
+                    setattr(method, field, rendered)
+                    method.parse_mode = ParseMode.HTML
+        apply_custom_button_icons(getattr(method, "reply_markup", None))
+        return await make_request(bot, method)
 
 
 @user_dp.callback_query(F.data.in_({"signals_accept", "signals_decline"}))
@@ -1304,11 +1381,6 @@ async def autotrade_handler(message: Message):
             text="🤖 Подключить автоторговлю",
             style="success",
             url=SUPPORT_URL,
-        )],
-        [InlineKeyboardButton(
-            text="✉️ Написать администратору",
-            style="primary",
-            callback_data="support_admin",
         )],
     ])
 
@@ -2490,6 +2562,8 @@ async def main():
     admin_bot = Bot(token=TOKEN_ADMIN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     USER_BOT = user_bot
     ADMIN_BOT = admin_bot
+    await setup_custom_emojis(user_bot)
+    await setup_custom_emojis(admin_bot)
 
     try:
         user_info, admin_info = await asyncio.gather(
