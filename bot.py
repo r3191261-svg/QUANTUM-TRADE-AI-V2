@@ -173,7 +173,7 @@ def init_db():
     with connect_db() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
+                user_id BIGINT PRIMARY KEY,
                 username TEXT DEFAULT '',
                 full_name TEXT DEFAULT '',
                 status TEXT DEFAULT 'active',
@@ -184,7 +184,7 @@ def init_db():
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS admins (
-                user_id INTEGER PRIMARY KEY
+                user_id BIGINT PRIMARY KEY
             )
         """)
         conn.execute("""
@@ -195,31 +195,31 @@ def init_db():
                 timeframe TEXT,
                 details TEXT,
                 created_at TEXT,
-                created_by INTEGER
+                created_by BIGINT
             )
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS audit (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                actor_id INTEGER,
+                actor_id BIGINT,
                 action TEXT,
-                target_id INTEGER,
+                target_id BIGINT,
                 created_at TEXT
             )
         """)
         # Keeps source-channel post IDs to prevent duplicate broadcasts.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS source_posts (
-                message_id INTEGER PRIMARY KEY,
+                message_id BIGINT PRIMARY KEY,
                 text TEXT DEFAULT '',
                 created_at TEXT
             )
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS source_deliveries (
-                source_message_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                copied_message_id INTEGER,
+                source_message_id BIGINT NOT NULL,
+                user_id BIGINT NOT NULL,
+                copied_message_id BIGINT,
                 PRIMARY KEY (source_message_id, user_id)
             )
         """)
@@ -243,6 +243,18 @@ def init_db():
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_source_posts_created_at ON source_posts(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_news_published_at ON news(published_at)")
+        if DATABASE_URL:
+            # Telegram IDs exceed PostgreSQL's 32-bit INTEGER range. Upgrade
+            # projects created by earlier versions before inserting admin IDs.
+            for table, column in (
+                ("users", "user_id"), ("admins", "user_id"),
+                ("signals", "created_by"), ("audit", "actor_id"),
+                ("audit", "target_id"), ("source_posts", "message_id"),
+                ("source_deliveries", "source_message_id"),
+                ("source_deliveries", "user_id"),
+                ("source_deliveries", "copied_message_id"),
+            ):
+                conn.execute(f"ALTER TABLE {table} ALTER COLUMN {column} TYPE BIGINT")
         source_columns = {row[1] for row in conn.execute("PRAGMA table_info(source_posts)").fetchall()}
         if "updated_at" not in source_columns:
             conn.execute("ALTER TABLE source_posts ADD COLUMN updated_at TEXT")
