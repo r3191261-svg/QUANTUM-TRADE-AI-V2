@@ -773,13 +773,19 @@ async def custom_emoji_markup(bot, fallback_emoji):
 async def setup_custom_emojis(bot):
     """Load the configured emoji pack and install outgoing message decoration."""
     global _CUSTOM_EMOJI_PACK
-    if not any(isinstance(item, CustomEmojiRequestMiddleware) for item in bot.session.middleware):
-        bot.session.middleware.register(CustomEmojiRequestMiddleware())
+    middleware_manager = getattr(getattr(bot, "session", None), "middleware", None)
+    if middleware_manager is not None and not any(
+        isinstance(item, CustomEmojiRequestMiddleware) for item in middleware_manager
+    ):
+        middleware_manager.register(CustomEmojiRequestMiddleware())
     if _CUSTOM_EMOJI_PACK is not None:
         return
     _CUSTOM_EMOJI_PACK = {}
+    get_sticker_set = getattr(bot, "get_sticker_set", None)
+    if not callable(get_sticker_set):
+        return
     try:
-        sticker_set = await bot.get_sticker_set(CUSTOM_EMOJI_PACK_NAME)
+        sticker_set = await get_sticker_set(CUSTOM_EMOJI_PACK_NAME)
         for sticker in sticker_set.stickers:
             custom_id = getattr(sticker, "custom_emoji_id", None)
             if custom_id:
