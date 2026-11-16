@@ -82,7 +82,10 @@ DB_PATH = os.getenv("DB_PATH", "quantum.db")
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif")
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
-WELCOME_STICKER_FILE_ID = os.getenv("WELCOME_STICKER_FILE_ID", "").strip()
+CUSTOM_EMOJI_PACK_NAME = os.getenv(
+    "CUSTOM_EMOJI_PACK_NAME", "VajbkodimHttpstmeZEWopnLV4Ig5Njky"
+).strip()
+_CUSTOM_EMOJI_PACK = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -257,12 +260,6 @@ def init_db():
         conn.execute("""
             CREATE TABLE IF NOT EXISTS admins (
                 user_id BIGINT PRIMARY KEY
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS app_settings (
-                name TEXT PRIMARY KEY,
-                value TEXT NOT NULL
             )
         """)
         conn.execute("""
@@ -696,16 +693,6 @@ async def start_handler(message: Message):
         await message.answer("⛔ Доступ временно ограничен.\nОбратитесь в поддержку.")
         return
 
-    welcome_text = (
-        "⚡ <b>QUANTUM TRADE AI</b>\n\n"
-        "<b>Добро пожаловать в мир интеллектуальной торговли!</b> ✨\n\n"
-        "Мы анализируем рынок за вас, используя современные алгоритмы "
-        "искусственного интеллекта, чтобы помочь вам принимать более "
-        "взвешенные торговые решения.\n\n"
-        "📊 <b>Хотите получать торговые сигналы и следить за "
-        "возможностями рынка вместе с QUANTUM TRADE AI?</b>"
-    )
-
     consent = user[7] if user and len(user) > 7 else -1
 
     if consent in (0, 1):
@@ -716,7 +703,32 @@ async def start_handler(message: Message):
         )
         return
 
-    if user and len(user) > 8 and not user[8]:
+    welcome_emoji = await custom_emoji_markup(message.bot, "✨")
+    welcome_text = (
+        "⚡ <b>QUANTUM TRADE AI</b>\n\n"
+        f"{welcome_emoji} <b>Добро пожаловать в мир интеллектуальной торговли!</b>\n\n"
+        "Мы анализируем рынок за вас, используя современные алгоритмы "
+        "искусственного интеллекта, чтобы помочь вам принимать более "
+        "взвешенные торговые решения.\n\n"
+        "📊 <b>Хотите получать торговые сигналы и следить за "
+        "возможностями рынка вместе с QUANTUM TRADE AI?</b>"
+    )
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [colored_button("🟢 ✅ ПРИНЯТЬ", "signals_accept", "success")],
+        [colored_button("🔴 ❌ ОТКЛОНИТЬ", "signals_decline", "danger")],
+    ])
+    if welcome_emoji != "✨":
+        try:
+            await message.answer(welcome_text, reply_markup=keyboard)
+            return
+        except TelegramBadRequest:
+            log.exception("Could not use custom emoji pack in welcome message; using fallback")
+            _CUSTOM_EMOJI_PACK = {}
+            welcome_text = re.sub(r'<tg-emoji emoji-id="[^"]+">(.*?)</tg-emoji>', r"\1", welcome_text)
+
+    # If Bot API cannot load/use the emoji pack, retain the bundled intro animation.
+    intro_sent = bool(user and len(user) > 8 and user[8])
+    if not intro_sent:
         with connect_db() as conn:
             claimed = conn.execute(
                 "UPDATE users SET intro_sent=1 WHERE user_id=? AND intro_sent=0",
@@ -724,57 +736,37 @@ async def start_handler(message: Message):
             ).rowcount
         if claimed:
             try:
-                sticker_file_id = get_app_setting(
-                    "welcome_sticker_file_id", WELCOME_STICKER_FILE_ID
-                )
-                if sticker_file_id:
-                    await message.answer_sticker(sticker_file_id)
-                elif INTRO_GIF_FILE_ID:
-                    await message.answer_animation(INTRO_GIF_FILE_ID)
-                elif os.path.isfile(INTRO_GIF_PATH):
-                    await message.answer_animation(FSInputFile(INTRO_GIF_PATH))
-                else:
-                    log.info("Intro GIF is not configured; continuing without it.")
+                animation = INTRO_GIF_FILE_ID or (FSInputFile(INTRO_GIF_PATH) if os.path.isfile(INTRO_GIF_PATH) else None)
+                if animation:
+                    await message.answer_animation(animation, caption=welcome_text, reply_markup=keyboard)
+                    return
             except TelegramAPIError:
-                log.exception("Could not send intro GIF")
+                log.exception("Could not send intro animation; using welcome text")
                 with connect_db() as conn:
-                    conn.execute(
-                        "UPDATE users SET intro_sent=0 WHERE user_id=?",
-                        (message.from_user.id,),
-                    )
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [colored_button("🟢 ✅ ПРИНЯТЬ", "signals_accept", "success")],
-        [colored_button("🔴 ❌ ОТКЛОНИТЬ", "signals_decline", "danger")],
-    ])
+                    conn.execute("UPDATE users SET intro_sent=0 WHERE user_id=?", (message.from_user.id,))
     await message.answer(welcome_text, reply_markup=keyboard)
 
 
-def get_app_setting(name, default=""):
-    with connect_db() as conn:
-        row = conn.execute(
-            "SELECT value FROM app_settings WHERE name=?", (name,)
-        ).fetchone()
-    return row[0] if row and row[0] else default
+async def custom_emoji_markup(bot, fallback_emoji):
+    """Return an animated custom-emoji entity from the configured public pack."""
+    global _CUSTOM_EMOJI_PACK
+    if _CUSTOM_EMOJI_PACK is None:
+        _CUSTOM_EMOJI_PACK = {}
+        try:
+            sticker_set = await bot.get_sticker_set(CUSTOM_EMOJI_PACK_NAME)
+            for sticker in sticker_set.stickers:
+                custom_id = getattr(sticker, "custom_emoji_id", None)
+                if custom_id:
+                    _CUSTOM_EMOJI_PACK[sticker.emoji or fallback_emoji] = custom_id
+        except TelegramAPIError:
+            log.exception("Could not load custom emoji pack %s", CUSTOM_EMOJI_PACK_NAME)
 
-
-@user_dp.message(F.sticker)
-async def owner_welcome_sticker_handler(message: Message):
-    if not message.from_user or message.from_user.id != OWNER_ID or not message.sticker:
-        return
-
-    sticker = message.sticker
-    if not (sticker.is_animated or sticker.is_video):
-        await message.answer("Пришлите анимированный стикер или видеостикер для приветствия.")
-        return
-
-    with connect_db() as conn:
-        conn.execute(
-            "INSERT INTO app_settings (name, value) VALUES (?, ?) "
-            "ON CONFLICT(name) DO UPDATE SET value=excluded.value",
-            ("welcome_sticker_file_id", sticker.file_id),
-        )
-    await message.answer("Анимированный стикер сохранён. Он будет показываться в приветствии новым пользователям.")
+    custom_id = _CUSTOM_EMOJI_PACK.get(fallback_emoji)
+    if not custom_id and _CUSTOM_EMOJI_PACK:
+        custom_id = next(iter(_CUSTOM_EMOJI_PACK.values()))
+    if not custom_id:
+        return fallback_emoji
+    return f'<tg-emoji emoji-id="{custom_id}">{html.escape(fallback_emoji)}</tg-emoji>'
 
 
 @user_dp.callback_query(F.data.in_({"signals_accept", "signals_decline"}))
@@ -841,8 +833,9 @@ async def options_handler(message: Message):
     if not await check_user(message):
         return
 
+    section_emoji = await custom_emoji_markup(message.bot, "📈")
     await message.answer(
-        "📈 <b>СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+        f"{section_emoji} <b>СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
         "Выберите нужный раздел.\n\nСигналы и данные обновляются автоматически.",
         reply_markup=binary_menu_keyboard(),
     )
@@ -995,8 +988,9 @@ async def binary_pair_history(callback: CallbackQuery):
 
 @user_dp.callback_query(F.data == "binary_menu")
 async def binary_menu(callback: CallbackQuery):
+    section_emoji = await custom_emoji_markup(callback.bot, "📈")
     await callback.message.edit_text(
-        "📈 <b>СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
+        f"{section_emoji} <b>СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
         "Выберите раздел.\n\nСигналы и данные обновляются автоматически.",
         reply_markup=binary_menu_keyboard(),
     )
