@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
 from urllib.parse import quote
@@ -93,6 +94,8 @@ admin_dp = Dispatcher()
 
 # Set in main(); admin handlers use this bot to deliver user broadcasts.
 USER_BOT: Bot | None = None
+_POSTGRES_POOL = None
+_POSTGRES_POOL_LOCK = threading.Lock()
 
 
 # =========================================================
@@ -151,10 +154,26 @@ class PostgresConnection:
 @contextmanager
 def connect_db():
     if DATABASE_URL:
-        import psycopg
-        conn = PostgresConnection(psycopg.connect(DATABASE_URL, connect_timeout=15))
+        global _POSTGRES_POOL
+        if _POSTGRES_POOL is None:
+            with _POSTGRES_POOL_LOCK:
+                if _POSTGRES_POOL is None:
+                    from psycopg_pool import ConnectionPool
+                    _POSTGRES_POOL = ConnectionPool(
+                        conninfo=DATABASE_URL,
+                        min_size=1,
+                        max_size=10,
+                        timeout=8,
+                        kwargs={"connect_timeout": 5},
+                        open=True,
+                    )
+        # Reuse warm connections instead of opening a new TLS/Postgres
+        # connection for every button press and user update.
+        conn = PostgresConnection(_POSTGRES_POOL.getconn())
+        release = _POSTGRES_POOL.putconn
     else:
         conn = sqlite3.connect(DB_PATH, timeout=30)
+        release = None
     try:
         yield conn
         conn.commit()
@@ -162,7 +181,10 @@ def connect_db():
         conn.rollback()
         raise
     finally:
-        conn.close()
+        if release:
+            release(conn.connection)
+        else:
+            conn.close()
 
 
 def now():
@@ -292,6 +314,10 @@ def register_user(user):
             user.full_name or "",
             user.id,
         ))
+        return conn.execute(
+            "SELECT * FROM users WHERE user_id=?",
+            (user.id,),
+        ).fetchone()
 
 
 def get_user(user_id):
@@ -500,9 +526,8 @@ async def check_user(message):
     if not message.from_user:
         return False
 
-    register_user(message.from_user)
-
-    if get_status(message.from_user.id) in ("blocked", "suspended"):
+    user = register_user(message.from_user)
+    if user and user[3] in ("blocked", "suspended"):
         await message.answer(
             "⛔ Доступ временно ограничен.\nОбратитесь в поддержку."
         )
@@ -560,8 +585,9 @@ async def start_handler(message: Message):
     if not message.from_user:
         return
 
-    register_user(message.from_user)
-    if not await check_user(message):
+    user = register_user(message.from_user)
+    if user and user[3] in ("blocked", "suspended"):
+        await message.answer("⛔ Доступ временно ограничен.\nОбратитесь в поддержку.")
         return
 
     welcome_text = (
@@ -574,7 +600,6 @@ async def start_handler(message: Message):
         "возможностями рынка вместе с QUANTUM TRADE AI?</b>"
     )
 
-    user = get_user(message.from_user.id)
     consent = user[7] if user and len(user) > 7 else -1
 
     if consent in (0, 1):
@@ -1270,8 +1295,8 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
     post_text = message.text or message.caption or ""
     posted_at = now()
 
-    # Claim the source post once. Duplicate Telegram updates must never trigger
-    # a second broadcast, including when another poller receives the same post.
+    # Record the source post once. On a duplicate Telegram update, retry only
+    # deliveries that have not yet been recorded as successful.
     try:
         with connect_db() as conn:
             inserted = conn.execute("""
@@ -1279,21 +1304,21 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT DO NOTHING
             """, (message.message_id, post_text, posted_at, posted_at)).rowcount
-            if not inserted:
-                log.info("Duplicate source post %s ignored.", message.message_id)
-                return
-            conn.execute("""
-                INSERT INTO signals
-                (instrument, direction, timeframe, details, created_at, created_by)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                "Публикация",
-                "Источник",
-                "-",
-                post_text[:3000],
-                posted_at,
-                0,
-            ))
+            if inserted:
+                conn.execute("""
+                    INSERT INTO signals
+                    (instrument, direction, timeframe, details, created_at, created_by)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (
+                    "Публикация",
+                    "Источник",
+                    "-",
+                    post_text[:3000],
+                    posted_at,
+                    0,
+                ))
+            else:
+                log.info("Resuming undelivered recipients for source post %s.", message.message_id)
     except sqlite3.Error:
         log.exception("Could not save source-channel entry.")
         return
@@ -1311,15 +1336,18 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
 
     sent = 0
     failed = 0
+    delivery_limit = asyncio.Semaphore(8)
 
-    for (user_id,) in recipients:
+    async def deliver(user_id):
+        nonlocal sent, failed
         try:
-            copied = await bot.copy_message(
-                chat_id=user_id,
-                from_chat_id=SOURCE_CHANNEL_ID,
-                message_id=message.message_id,
-                reply_markup=signal_action_keyboard(),
-            )
+            async with delivery_limit:
+                copied = await bot.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=SOURCE_CHANNEL_ID,
+                    message_id=message.message_id,
+                    reply_markup=signal_action_keyboard(),
+                )
             with connect_db() as conn:
                 conn.execute(
                     "INSERT OR IGNORE INTO source_deliveries "
@@ -1327,7 +1355,6 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                     (message.message_id, user_id, copied.message_id),
                 )
             sent += 1
-            await asyncio.sleep(0.05)
         except TelegramAPIError as error:
             failed += 1
             log.warning(
@@ -1335,6 +1362,11 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                 user_id,
                 error,
             )
+        except sqlite3.Error:
+            failed += 1
+            log.exception("Could not record source delivery for user %s", user_id)
+
+    await asyncio.gather(*(deliver(user_id) for (user_id,) in recipients))
 
     log.info(
         "Source entry processed. Delivered=%s Failed=%s",
