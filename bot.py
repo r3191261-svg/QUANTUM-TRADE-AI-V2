@@ -1164,6 +1164,24 @@ def signal_result_marker(details):
     return "⏳"
 
 
+def normalize_timeframe(value):
+    compact = re.sub(r"[^A-ZА-ЯЁ0-9]", "", (value or "").upper())
+    aliases = {
+        "1m": ("M1", "1M", "1МИН", "1МИНУТА", "1МИНУТУ", "1MIN", "1MINUTE"),
+        "15m": ("M15", "15M", "15МИН", "15МИНУТ", "15MIN", "15MINUTES"),
+        "30m": ("M30", "30M", "30МИН", "30МИНУТ", "30MIN", "30MINUTES"),
+        "5m": ("M5", "5M", "5МИН", "5МИНУТ", "5МИНУТА", "5MIN", "5MINUTES"),
+        "1h": ("H1", "1H", "1ЧАС", "1ЧАСА", "1HOUR"),
+        "4h": ("H4", "4H", "4ЧАС", "4ЧАСА", "4HOURS"),
+        "1d": ("D1", "1D", "1ДЕНЬ", "1DAY"),
+        "1w": ("W1", "1W", "1НЕДЕЛЯ", "1WEEK"),
+    }
+    for timeframe, tokens in aliases.items():
+        if any(token in compact for token in tokens):
+            return timeframe
+    return None
+
+
 @user_dp.message(F.text.in_({"📊 СТАТИСТИКА", "📈 Статистика"}))
 async def statistics_handler(message: Message):
     if not await check_user(message):
@@ -1430,10 +1448,10 @@ async def my_signals_handler(message: Message):
     matching = []
     for text, created_at in source_rows:
         pairs = extract_pairs(text or "")
-        if pairs.intersection(favorites):
+        if pairs.intersection(favorites) and normalize_timeframe(text) == selected_timeframe:
             matching.append((text, created_at))
     for instrument, direction, timeframe, details, created_at in manual_rows:
-        timeframe_matches = (timeframe or "").lower() == selected_timeframe.lower()
+        timeframe_matches = normalize_timeframe(timeframe) == selected_timeframe
         if instrument in favorites and timeframe_matches:
             matching.append((
                 f"{instrument} · {direction} · {timeframe}\n{details or ''}",
@@ -1445,7 +1463,7 @@ async def my_signals_handler(message: Message):
         f"Рынок: {selected_market} · Интервал ручных сигналов: {selected_timeframe}\n"
     )
     if not matching:
-        text += "\nНовых сигналов по избранным инструментам пока нет."
+        text += "\nСигналов с выбранными парами и интервалом пока нет."
     else:
         for body, created_at in matching[:10]:
             text += f"\n{signal_result_marker(body)} {created_at or 'время не указано'}\n{html.escape(body[:550])}\n──────────────\n"
@@ -1467,10 +1485,16 @@ async def notifications_handler(message: Message):
 
 def preferences_text(user):
     markets = {"all": "Все рынки", "forex": "Forex", "crypto": "Крипто"}
+    intervals = {"1m": "1 мин", "5m": "5 мин", "15m": "15 мин", "30m": "30 мин",
+                 "1h": "1 час", "4h": "4 часа", "1d": "1 день", "1w": "1 неделя"}
     return (
-        "⚙️ РЫНОК И ИНТЕРВАЛ\n━━━━━━━━━━━━━━━━━━\n\n"
+        "⚙️ ФИЛЬТР МОИХ СИГНАЛОВ\n━━━━━━━━━━━━━━━━━━\n\n"
         f"Рынок: {markets.get(user[10] or 'all', 'Все рынки')}\n"
-        f"Интервал: {user[11] or '5m'}\n\nВыберите параметры ниже."
+        f"Интервал: {intervals.get(user[11] or '5m', user[11] or '5 мин')}\n\n"
+        "Эти параметры фильтруют раздел «Мои сигналы»: рынок ограничивает список "
+        "избранных инструментов, а интервал оставляет сигналы с совпадающим "
+        "таймфреймом. Публикации без указанного таймфрейма в этот список не попадут.\n\n"
+        "Выберите параметры ниже."
     )
 
 
