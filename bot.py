@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import threading
+import unicodedata
 from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
@@ -776,6 +777,49 @@ async def custom_emoji_markup(bot, fallback_emoji):
     return f'<tg-emoji emoji-id="{custom_id}">{html.escape(fallback_emoji)}</tg-emoji>'
 
 
+def is_single_emoji_fallback(value):
+    """Reject pack entries whose alt text is a letter or multiple separate emoji."""
+    if not value or any(char.isalpha() or char.isspace() for char in value):
+        return False
+    if re.fullmatch(r"[#*0-9]\ufe0f?\u20e3", value):
+        return True
+
+    codepoints = [ord(char) for char in value]
+    regional = [cp for cp in codepoints if 0x1F1E6 <= cp <= 0x1F1FF]
+    if regional:
+        return len(regional) == 2 and len(regional) == len(codepoints)
+
+    bases = [
+        char for char in value
+        if unicodedata.category(char) == "So" and not (0x1F3FB <= ord(char) <= 0x1F3FF)
+    ]
+    allowed = all(
+        unicodedata.category(char) == "So"
+        or 0x1F3FB <= ord(char) <= 0x1F3FF
+        or ord(char) in {0x200D, 0xFE0E, 0xFE0F, 0x20E3}
+        or 0xE0020 <= ord(char) <= 0xE007F
+        for char in value
+    )
+    if not allowed or not bases:
+        return False
+    # A ZWJ sequence is one composed sticker; separate adjacent symbols are rejected.
+    joiners = codepoints.count(0x200D)
+    return len(bases) == 1 if not joiners else len(bases) == joiners + 1
+
+
+def remove_emoji_characters(text):
+    """Remove static or unsupported emoji glyphs; animated custom emoji are added separately."""
+    text = re.sub(r"[#*0-9]\ufe0f?\u20e3", "", text)
+    output = []
+    for char in text:
+        cp = ord(char)
+        is_emoji_symbol = unicodedata.category(char) == "So" or 0x1F3FB <= cp <= 0x1F3FF
+        is_emoji_joiner = cp in {0x200D, 0xFE0E, 0xFE0F, 0x20E3} or 0xE0020 <= cp <= 0xE007F
+        if not is_emoji_symbol and not is_emoji_joiner:
+            output.append(char)
+    return "".join(output)
+
+
 async def setup_custom_emojis(bot):
     """Load the configured emoji pack and install outgoing message decoration."""
     global _CUSTOM_EMOJI_PACK
@@ -797,7 +841,11 @@ async def setup_custom_emojis(bot):
             for sticker in sticker_set.stickers:
                 custom_id = getattr(sticker, "custom_emoji_id", None)
                 emoji = sticker.emoji or ""
-                if custom_id and emoji:
+                is_animated = bool(
+                    getattr(sticker, "is_animated", False)
+                    or getattr(sticker, "is_video", False)
+                )
+                if custom_id and is_animated and is_single_emoji_fallback(emoji):
                     _CUSTOM_EMOJI_PACK.setdefault(emoji, []).append(custom_id)
                     pack_count += 1
             log.info("Loaded %d custom emojis from %s", pack_count, pack_name)
@@ -818,7 +866,7 @@ def next_custom_emoji_id(emoji):
 
 def render_custom_emojis(text):
     """Replace pack emoji in HTML messages with Telegram custom emoji entities."""
-    if not text or not _CUSTOM_EMOJI_PACK:
+    if not text:
         return text
     protected = []
 
@@ -827,6 +875,11 @@ def render_custom_emojis(text):
         return f"\x00CUSTOM_EMOJI_{len(protected) - 1}\x00"
 
     text = re.sub(r"<tg-emoji\b[^>]*>.*?</tg-emoji>", protect, text, flags=re.S)
+    if not _CUSTOM_EMOJI_PACK:
+        text = remove_emoji_characters(text)
+        for index, block in enumerate(protected):
+            text = text.replace(f"\x00CUSTOM_EMOJI_{index}\x00", block)
+        return text
     emoji_map = {
         emoji: custom_ids
         for emoji, custom_ids in _CUSTOM_EMOJI_PACK.items()
@@ -839,6 +892,8 @@ def render_custom_emojis(text):
         lambda match: custom_emoji_entity(match.group(0), next_custom_emoji_id(match.group(0))),
         text,
     )
+    text = re.sub(r"<tg-emoji\b[^>]*>.*?</tg-emoji>", protect, text, flags=re.S)
+    text = remove_emoji_characters(text)
     for index, block in enumerate(protected):
         text = text.replace(f"\x00CUSTOM_EMOJI_{index}\x00", block)
     return text
@@ -852,7 +907,7 @@ def custom_emoji_entity(emoji, custom_id):
 
 def apply_custom_button_icons(reply_markup):
     """Use the selected custom emoji as Telegram button icons when available."""
-    if not reply_markup or not _CUSTOM_EMOJI_PACK:
+    if not reply_markup:
         return
     keyboard = getattr(reply_markup, "inline_keyboard", None) or getattr(reply_markup, "keyboard", None)
     if not keyboard:
@@ -862,15 +917,20 @@ def apply_custom_button_icons(reply_markup):
             if getattr(button, "icon_custom_emoji_id", None):
                 continue
             label = getattr(button, "text", "") or ""
-            for emoji in sorted(_CUSTOM_EMOJI_PACK, key=len, reverse=True):
+            for emoji in sorted((_CUSTOM_EMOJI_PACK or {}), key=len, reverse=True):
                 if emoji and emoji in label:
                     try:
+                        # Use one animated icon per button and keep the button label text clean.
                         button.icon_custom_emoji_id = next_custom_emoji_id(emoji)
-                        if getattr(button, "callback_data", None) or getattr(button, "url", None):
-                            button.text = label.replace(emoji, "", 1).lstrip()
+                        button.text = remove_emoji_characters(label).strip()
                     except Exception:
                         pass
                     break
+            else:
+                try:
+                    button.text = remove_emoji_characters(label).strip()
+                except Exception:
+                    pass
 
 
 class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
@@ -945,7 +1005,9 @@ async def forex_handler(message: Message):
 @user_dp.message(Command("signals"))
 @user_dp.message(F.text.in_({
     "📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ",
+    "СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ",
     "📈 Сигналы для бинарных опционов",
+    "Сигналы для бинарных опционов",
     "⚡ БИНАРНЫЕ ОПЦИОНЫ",
     "⚡ Бинарные опционы",
 }))
@@ -1243,7 +1305,7 @@ async def news_back_callback(callback: CallbackQuery):
 # =========================================================
 
 @user_dp.message(Command("calendar"))
-@user_dp.message(F.text.in_({"📅 Экономический календарь", "📅 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ"}))
+@user_dp.message(F.text.in_({"📅 Экономический календарь", "Экономический календарь", "📅 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", "ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ"}))
 async def calendar_handler(message: Message):
     if not await check_user(message):
         return
@@ -1279,7 +1341,7 @@ def signal_result_marker(details):
 
 
 @user_dp.message(Command("stats"))
-@user_dp.message(F.text.in_({"📊 СТАТИСТИКА", "📈 Статистика"}))
+@user_dp.message(F.text.in_({"📊 СТАТИСТИКА", "СТАТИСТИКА", "📈 Статистика", "Статистика"}))
 async def statistics_handler(message: Message):
     if not await check_user(message):
         return
@@ -1322,7 +1384,9 @@ async def statistics_handler(message: Message):
 @user_dp.message(Command("history"))
 @user_dp.message(F.text.in_({
     "🕘 ИСТОРИЯ СИГНАЛОВ",
+    "ИСТОРИЯ СИГНАЛОВ",
     "🕘 История сигналов",
+    "История сигналов",
 }))
 async def history_handler(message: Message):
     if not await check_user(message):
@@ -1395,7 +1459,9 @@ async def history_handler(message: Message):
 @user_dp.message(Command("autotrade"))
 @user_dp.message(F.text.in_({
     "🤖 АВТОМАТИЧЕСКИЙ БОТ",
+    "АВТОМАТИЧЕСКИЙ БОТ",
     "🤖 Автоматический бот",
+    "Автоматический бот",
 }))
 async def autotrade_handler(message: Message):
     if not await check_user(message):
@@ -1491,7 +1557,7 @@ async def support_admin_non_text(message: Message):
 # =========================================================
 
 @user_dp.message(Command("profile"))
-@user_dp.message(F.text.in_({"👤 МОЙ ПРОФИЛЬ", "👤 Мой профиль"}))
+@user_dp.message(F.text.in_({"👤 МОЙ ПРОФИЛЬ", "МОЙ ПРОФИЛЬ", "👤 Мой профиль", "Мой профиль"}))
 async def profile_handler(message: Message):
     if not await check_user(message):
         return
@@ -1523,7 +1589,7 @@ async def profile_handler(message: Message):
 # SETTINGS
 # =========================================================
 
-@user_dp.message(F.text.in_({"📈 МОИ СИГНАЛЫ", "📈 Мои сигналы"}))
+@user_dp.message(F.text.in_({"📈 МОИ СИГНАЛЫ", "МОИ СИГНАЛЫ", "📈 Мои сигналы", "Мои сигналы"}))
 async def my_signals_handler(message: Message):
     if not await check_user(message):
         return
@@ -1558,7 +1624,7 @@ async def my_signals_handler(message: Message):
 
 
 @user_dp.message(Command("notifications"))
-@user_dp.message(F.text.in_({"🔔 УВЕДОМЛЕНИЯ", "🔔 Уведомления"}))
+@user_dp.message(F.text.in_({"🔔 УВЕДОМЛЕНИЯ", "УВЕДОМЛЕНИЯ", "🔔 Уведомления", "Уведомления"}))
 async def notifications_handler(message: Message):
     if not await check_user(message):
         return
