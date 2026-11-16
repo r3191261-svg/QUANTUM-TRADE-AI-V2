@@ -1556,7 +1556,7 @@ async def profile_callback(callback: CallbackQuery):
 # SOURCE CHANNEL AUTO-FORWARDING
 # =========================================================
 
-async def decorate_signal_copy(bot, user_id, copied_message_id, message):
+async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_regular_fallback=False):
     """Add one animated emoji from the configured pack to an already-copied post."""
     if message.text:
         content = getattr(message, "html_text", None) or html.escape(message.text)
@@ -1575,6 +1575,8 @@ async def decorate_signal_copy(bot, user_id, copied_message_id, message):
         return
 
     icon = await custom_emoji_markup(bot, "📈")
+    if icon == "📈" and not allow_regular_fallback:
+        return
     decorated = f"{icon} {content}"
     common = {
         "chat_id": user_id,
@@ -1724,7 +1726,9 @@ async def signals_pro_edited_handler(message: Message, bot: Bot):
     for user_id, copied_id in deliveries:
         try:
             if message.text or message.caption is not None:
-                await decorate_signal_copy(bot, user_id, copied_id, message)
+                await decorate_signal_copy(
+                    bot, user_id, copied_id, message, allow_regular_fallback=True
+                )
             updated += 1
             await asyncio.sleep(0.05)
         except TelegramBadRequest as error:
