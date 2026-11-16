@@ -986,6 +986,7 @@ RU_EN_TRANSLATIONS = {
     "Календарь макроэкономических событий: время, страна, важность, фактическое значение и прогноз.": "Macroeconomic events calendar: time, country, importance, actual and forecast.",
     "Откройте официальный календарь по кнопке ниже.": "Open the economic calendar using the button below.",
     "Добро пожаловать в мир интеллектуальной торговли!": "Welcome to intelligent trading!",
+    "Добро пожаловать в интеллектуальную торговую платформу!": "Welcome to the intelligent trading platform!",
     "Мы анализируем рынок за вас, используя современные алгоритмы искусственного интеллекта, чтобы помочь вам принимать более взвешенные торговые решения.": "We analyze the market using modern AI algorithms to help you make more informed trading decisions.",
     "Хотите получать торговые сигналы и следить за возможностями рынка вместе с QUANTUM TRADE AI?": "Would you like to receive trading signals and follow market opportunities with QUANTUM TRADE AI?",
     "ПРИНЯТЬ": "ACCEPT",
@@ -1024,8 +1025,6 @@ RU_EN_TRANSLATIONS = {
     "Уведомления отключены.": "Notifications disabled.",
     "Сначала нажмите /start.": "Please press /start first.",
     "ПЕРСОНАЛЬНЫЕ НАСТРОЙКИ": "PREFERENCES",
-    "ВКЛ": "ON",
-    "ВЫКЛ": "OFF",
     "Русский": "Russian",
     "Выберите нужный раздел.": "Choose a section.",
     "Сигналы и данные обновляются автоматически.": "Signals and data update automatically.",
@@ -1060,6 +1059,113 @@ RU_EN_TRANSLATIONS = {
     "Комментарий:": "Details:",
     "Оповещения о новых сигналах включены.": "New signal notifications are on.",
     "Оповещения о новых сигналах выключены.": "New signal notifications are off.",
+    "Доступ ограничен.": "Access is restricted.",
+    "Сигналы включены.": "Signals are enabled.",
+    "Сигналы выключены.": "Signals are disabled.",
+    "Главное меню QUANTUM TRADE AI": "QUANTUM TRADE AI main menu",
+    "Аналитика валютного рынка": "FOREX MARKET ANALYSIS",
+    "Анализ рынка": "Market analysis",
+    "Торговые сигналы": "Trading signals",
+    "Источник реальных котировок пока не подключён.": "A live price feed is not connected yet.",
+    "Криптопары к USDT": "CRYPTO PAIRS AGAINST USDT",
+    "В сохранённых публикациях пока не найдено сигналов с распознанными валютными парами.": "No signals with recognized currency pairs were found in saved posts.",
+    "из": "of",
+    "сигнал(ов)": "signal(s)",
+    "сообщ.": "messages",
+    "Без текста": "No text",
+    "СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ": "BINARY OPTION SIGNALS",
+    "СИГНАЛОВ ЗА ПОСЛЕДНИЕ 10 МИНУТ": "SIGNALS IN THE LAST 10 MINUTES",
+    "Не удалось передать обращение: бот администратора сейчас недоступен. Попробуйте позже.": "Could not deliver your request: the admin bot is unavailable. Please try again later.",
+    "Напишите вопрос одним сообщением — я передам его администратору.": "Send your question in one message and I will forward it to the administrator.",
+    "Для отмены отправьте /cancel.": "Send /cancel to cancel.",
+    "Обращение отменено.": "Request cancelled.",
+    "Ваше сообщение передано администратору.": "Your message has been sent to the administrator.",
+    "Не удалось передать обращение. Попробуйте отправить его ещё раз позже.": "Could not deliver your request. Please try again later.",
+    "Пожалуйста, отправьте обращение текстом. Для отмены — /cancel.": "Please send your request as text. Send /cancel to cancel.",
+    "Доступ временно ограничен.": "Access is temporarily restricted.",
+    "Обратитесь в поддержку.": "Contact support.",
+    "Выберите нужный раздел в меню.": "Choose a section from the menu.",
+    "Ожидаю ваше сообщение.": "Waiting for your message.",
+    "Выбор сохранён": "Your choice has been saved",
+    "Язык интерфейса изменён на русский.": "Interface language changed to Russian.",
+    "Календарь": "Calendar",
+    "Открыть новости Investing.com": "Open Investing.com news",
+    "Официальные RSS и условия": "Official RSS and terms",
+    "Новости Investing.com · Сегодня": "Investing.com News · Today",
+    "Лента доступна на официальном сайте.": "The news feed is available on the official website.",
+    "Показ публикаций внутри бота включается только после подтверждения прав на хранение и повторное распространение RSS-материалов.": "Posts will appear in the bot only after permission to store and redistribute RSS content is confirmed.",
+    "Сегодняшнем RSS-потоке пока нет публикаций.": "There are no posts in today's RSS feed yet.",
+    "Нажмите «Обновить», чтобы получить свежую ленту.": "Tap Refresh to load the latest feed.",
+    "Лента обновлена": "Feed refreshed",
+    "Откройте официальный сайт Investing.com": "Open the official Investing.com website",
+    "Новость не найдена.": "News item not found.",
+    "Описание в RSS источником не предоставлено.": "The RSS source did not provide a description.",
+    "время не указано источником": "time not provided by the source",
+    "Ташкент": "Tashkent",
+    "Открыть на Investing.com": "Open on Investing.com",
+    "К сегодняшним новостям": "Back to today's news",
+    "Откройте официальный календарь по кнопке ниже.": "Open the official calendar using the button below.",
+    "Фактическое значение": "Actual",
+    "Прогноз": "Forecast",
+    "Выигрыш": "Win",
+    "Проигрыш": "Loss",
+    "активен": "active",
+    "неактивен": "inactive",
+    "Имя": "Name",
+    "Пользователь": "User",
+    "ID:": "ID:",
+    "Источник": "Source",
+    "Поддержка": "Support",
+    "ВНИЗ": "DOWN",
+    "ВВЕРХ": "UP",
+    "вверх": "up",
+    "вниз": "down",
+    "Демо-анализ": "AI analysis",
+    "СИГНАЛЫ ВКЛЮЧЕНЫ": "SIGNALS ENABLED",
+    "СИГНАЛЫ ОТКЛЮЧЕНЫ": "SIGNALS DISABLED",
+    "Вы будете получать новые сигналы.": "You will receive new signals.",
+    "Сигналы отправляться не будут.": "Signals will not be sent.",
+    "Главное меню QUANTUM TRADE AI": "QUANTUM TRADE AI main menu",
+    "Статистика за последние 10 минут": "Statistics for the last 10 minutes",
+    "СТАТИСТИКА ЗА ПОСЛЕДНИЕ 10 МИНУТ": "STATISTICS FOR THE LAST 10 MINUTES",
+    "СТАТИСТИКА ЗА ПОСЛЕДНИЕ 24 ЧАСА": "STATISTICS FOR THE LAST 24 HOURS",
+    "Статистика за последние 24 часа": "Statistics for the last 24 hours",
+    "РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 24 ЧАСА": "RESULTS FOR THE LAST 24 HOURS",
+    "Сигналов за сутки": "Signals in the last 24 hours",
+    "История сигналов за 24 часа": "Signal history for the last 24 hours",
+    "Календарь макроэкономических событий": "Macroeconomic events calendar",
+    "Валютные пары": "Currency pairs",
+    "Новости Investing.com": "Investing.com News",
+    "Старее": "Older",
+    "Новее": "Newer",
+    "Обновить": "Refresh",
+    "СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ": "BINARY OPTION SIGNALS",
+    "управление сигналами": "signal management",
+    "Пользователи": "Users",
+    "Рассылка": "Broadcast",
+    "Блокировки": "Blocks",
+    "Администраторы": "Administrators",
+    "Журнал действий": "Action log",
+    "Мониторинг": "Monitoring",
+    "Настройки бота": "Bot settings",
+    "ПАНЕЛЬ УПРАВЛЕНИЯ": "ADMIN PANEL",
+    "КОМАНДЫ АДМИНИСТРАТОРА": "ADMIN COMMANDS",
+    "Последние пользователи": "Recent users",
+    "Всего пользователей": "Total users",
+    "Состояние ботов": "Bot status",
+    "Последний сигнал": "Latest signal",
+    "Последние ошибки": "Recent errors",
+    "Доставка сообщений": "Message delivery",
+    "Уведомления: ВКЛ": "Notifications: ON",
+    "Уведомления: ВЫКЛ": "Notifications: OFF",
+    "🔔 Уведомления: ВКЛ": "🔔 Notifications: ON",
+    "🔕 Уведомления: ВЫКЛ": "🔕 Notifications: OFF",
+    "Уведомления: Вкл": "Notifications: ON",
+    "Уведомления: Выкл": "Notifications: OFF",
+    "ID: ": "ID: ",
+    "Имя: ": "Name: ",
+    "Username: ": "Username: ",
+    "Статус: ": "Status: ",
 }
 
 
@@ -1067,6 +1173,10 @@ def translate_to_english(text):
     for russian, english in sorted(RU_EN_TRANSLATIONS.items(), key=lambda item: len(item[0]), reverse=True):
         text = text.replace(russian, english)
     return text
+
+
+def localized_user_text(user_id, text):
+    return translate_to_english(text) if chat_language(user_id) == "en" else text
 
 
 def chat_language(chat_id):
@@ -1106,6 +1216,13 @@ def apply_custom_button_icons(reply_markup, language="ru"):
                     break
             else:
                 try:
+                    fallback_emoji = next(
+                        (candidate for candidate in ANIMATED_EMOJI_TARGETS if candidate in label),
+                        None,
+                    )
+                    fallback_id = next_custom_emoji_id(fallback_emoji) if fallback_emoji else None
+                    if fallback_id:
+                        button.icon_custom_emoji_id = fallback_id
                     button.text = remove_emoji_characters(label).strip()
                 except Exception:
                     pass
@@ -1142,7 +1259,7 @@ class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
 async def signal_consent_handler(callback: CallbackQuery):
     user = get_user(callback.from_user.id)
     if not user or user[3] != "active":
-        await callback.answer("Доступ ограничен.", show_alert=True)
+        await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
         return
 
     accepted = callback.data == "signals_accept"
@@ -1159,7 +1276,7 @@ async def signal_consent_handler(callback: CallbackQuery):
         "⭕ <b>СИГНАЛЫ ОТКЛЮЧЕНЫ</b>\nСигналы отправляться не будут."
     )
     await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.answer("Выбор сохранён")
+    await callback.answer(localized_user_text(callback.from_user.id, "Выбор сохранён"))
     await callback.message.answer(
         status + "\n\n💠 <b>Главное меню QUANTUM TRADE AI</b>",
         reply_markup=main_keyboard,
@@ -1278,7 +1395,7 @@ async def pair_page_callback(callback: CallbackQuery):
     try:
         offset = max(0, int(callback.data.split(":", 1)[1]))
     except ValueError:
-        await callback.answer("Некорректная страница.", show_alert=True)
+        await callback.answer(localized_user_text(callback.from_user.id, "Некорректная страница."), show_alert=True)
         return
     await show_pair_page(callback, offset)
     await callback.answer()
@@ -1446,7 +1563,10 @@ async def news_refresh_callback(callback: CallbackQuery):
     await fetch_and_store_news()
     await show_news_page(callback, 0)
     await callback.answer(
-        "Лента обновлена" if NEWS_REPUBLISH_ALLOWED else "Откройте официальный сайт Investing.com"
+        localized_user_text(
+            callback.from_user.id,
+            "Лента обновлена" if NEWS_REPUBLISH_ALLOWED else "Откройте официальный сайт Investing.com",
+        )
     )
 
 
@@ -1459,7 +1579,7 @@ async def news_item_callback(callback: CallbackQuery):
             (news_id,),
         ).fetchone()
     if not item:
-        await callback.answer("Новость не найдена.", show_alert=True)
+        await callback.answer(localized_user_text(callback.from_user.id, "Новость не найдена."), show_alert=True)
         return
     title, description, url, image_url, published_at = item
     published = datetime.fromisoformat(published_at).astimezone(LOCAL_TZ).strftime("%d.%m.%Y %H:%M") if published_at else "время не указано источником"
@@ -1695,11 +1815,11 @@ async def autotrade_handler(message: Message):
 async def support_admin_start(callback: CallbackQuery, state: FSMContext):
     user = get_user(callback.from_user.id)
     if not user or user[3] != "active":
-        await callback.answer("Доступ ограничен.", show_alert=True)
+        await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
         return
 
     if await state.get_state() == SupportRequest.waiting_text.state:
-        await callback.answer("Ожидаю ваше сообщение.")
+        await callback.answer(localized_user_text(callback.from_user.id, "Ожидаю ваше сообщение."))
         return
 
     await state.set_state(SupportRequest.waiting_text)
@@ -1850,7 +1970,7 @@ async def toggle_notifications(callback: CallbackQuery):
     user = get_user(callback.from_user.id)
 
     if not user or user[3] != "active":
-        await callback.answer("Доступ ограничен.", show_alert=True)
+        await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
         return
 
     enabled = not bool(user[4])
@@ -1873,14 +1993,17 @@ async def toggle_notifications(callback: CallbackQuery):
             reply_markup=settings_keyboard(bool(user[4]))
         )
     await callback.answer(
-        "Уведомления включены." if enabled else "Уведомления отключены."
+        localized_user_text(
+            callback.from_user.id,
+            "Уведомления включены." if enabled else "Уведомления отключены.",
+        )
     )
 
 
 @user_dp.callback_query(F.data.in_(["lang_ru", "lang_en"]))
 async def language_handler(callback: CallbackQuery):
     if not get_user(callback.from_user.id):
-        await callback.answer("Сначала нажмите /start.", show_alert=True)
+        await callback.answer(localized_user_text(callback.from_user.id, "Сначала нажмите /start."), show_alert=True)
         return
 
     language = "ru" if callback.data == "lang_ru" else "en"
@@ -1916,7 +2039,7 @@ async def profile_callback(callback: CallbackQuery):
     user = get_user(callback.from_user.id)
 
     if not user:
-        await callback.answer("Сначала нажмите /start.", show_alert=True)
+        await callback.answer(localized_user_text(callback.from_user.id, "Сначала нажмите /start."), show_alert=True)
         return
 
     username = "@" + user[1] if user[1] else "не указан"

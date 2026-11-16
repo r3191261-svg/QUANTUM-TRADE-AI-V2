@@ -216,6 +216,24 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
             "GBP/JPY · m5 · вверх",
         )
 
+    async def test_button_icons_use_animated_pack_when_exact_fallback_is_missing(self):
+        old_pack = bot._CUSTOM_EMOJI_PACK
+        old_ids = bot._CUSTOM_EMOJI_FALLBACK_IDS
+        try:
+            bot._CUSTOM_EMOJI_PACK = {"✨": ["animated-id"]}
+            bot._CUSTOM_EMOJI_FALLBACK_IDS = ["animated-id"]
+            markup = bot.ReplyKeyboardMarkup(
+                keyboard=[[bot.KeyboardButton(text="🗓 Экономический календарь")]],
+                resize_keyboard=True,
+            )
+            bot.apply_custom_button_icons(markup)
+            button = markup.keyboard[0][0]
+            self.assertEqual(button.icon_custom_emoji_id, "animated-id")
+            self.assertEqual(button.text, "Экономический календарь")
+        finally:
+            bot._CUSTOM_EMOJI_PACK = old_pack
+            bot._CUSTOM_EMOJI_FALLBACK_IDS = old_ids
+
 
 if __name__ == "__main__":
     unittest.main()
