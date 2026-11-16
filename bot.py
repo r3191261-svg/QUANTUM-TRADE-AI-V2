@@ -55,6 +55,11 @@ CRYPTO_PAIRS = (
     "DOT/USDT", "LINK/USDT", "LTC/USDT", "BCH/USDT", "ETC/USDT",
     "XLM/USDT", "NEAR/USDT", "SUI/USDT", "APT/USDT", "FIL/USDT",
 )
+TRACKED_BINARY_PAIRS = (
+    "EUR/USD", "AUD/USD", "USD/CHF", "EUR/GBP", "EUR/AUD", "EUR/CHF",
+    "GBP/CHF", "AUD/CHF", "GBP/AUD", "USD/JPY", "EUR/JPY", "AUD/JPY",
+    "GBP/JPY", "BTC/USD",
+)
 NEWS_RSS_URL = os.getenv("NEWS_RSS_URL", "").strip() or "https://www.investing.com/rss/news.rss"
 NEWS_POLL_SECONDS = max(60, int(os.getenv("NEWS_POLL_SECONDS", "").strip() or "300"))
 NEWS_LIMIT = 100
@@ -73,6 +78,7 @@ PAIR_RE = re.compile(
 )
 
 DB_PATH = os.getenv("DB_PATH", "quantum.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif")
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
 
@@ -93,9 +99,62 @@ USER_BOT: Bot | None = None
 # DATABASE
 # =========================================================
 
+class PostgresConnection:
+    """Small SQLite-compatible adapter for the bot's managed PostgreSQL mode."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def execute(self, statement, parameters=()):
+        if statement.startswith("PRAGMA table_info("):
+            table = statement.removeprefix("PRAGMA table_info(").split(")", 1)[0]
+            try:
+                return self.connection.execute(
+                    "SELECT ordinal_position - 1 AS cid, column_name AS name "
+                    "FROM information_schema.columns "
+                    "WHERE table_schema=current_schema() AND table_name=%s "
+                    "ORDER BY ordinal_position",
+                    (table,),
+                )
+            except Exception as error:
+                raise sqlite3.Error(str(error)) from error
+
+        sql = statement.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "BIGSERIAL PRIMARY KEY")
+        ignore_insert = "INSERT OR IGNORE" in sql.upper()
+        sql = re.sub(r"INSERT\s+OR\s+IGNORE", "INSERT", sql, flags=re.IGNORECASE)
+        sql = sql.replace("?", "%s")
+        if ignore_insert:
+            sql = sql.rstrip().rstrip(";") + " ON CONFLICT DO NOTHING"
+        try:
+            return self.connection.execute(sql, parameters)
+        except Exception as error:
+            try:
+                import psycopg
+                if isinstance(error, psycopg.IntegrityError):
+                    raise sqlite3.IntegrityError(str(error)) from error
+                if isinstance(error, psycopg.Error):
+                    raise sqlite3.Error(str(error)) from error
+            except ImportError:
+                pass
+            raise
+
+    def commit(self):
+        self.connection.commit()
+
+    def rollback(self):
+        self.connection.rollback()
+
+    def close(self):
+        self.connection.close()
+
+
 @contextmanager
 def connect_db():
-    conn = sqlite3.connect(DB_PATH, timeout=30)
+    if DATABASE_URL:
+        import psycopg
+        conn = PostgresConnection(psycopg.connect(DATABASE_URL, connect_timeout=15))
+    else:
+        conn = sqlite3.connect(DB_PATH, timeout=30)
     try:
         yield conn
         conn.commit()
@@ -616,7 +675,7 @@ async def options_handler(message: Message):
 def binary_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [colored_button("💱 ВСЕ ВАЛЮТНЫЕ ПАРЫ", "binary_all_pairs", "primary")],
-        [colored_button("📈 СИГНАЛЫ БИНАРНЫХ ОПЦИОНОВ", "binary_recent_10", "success")],
+        [colored_button("📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", "binary_recent_10", "success")],
     ])
 
 
@@ -640,7 +699,7 @@ async def binary_all_pairs(callback: CallbackQuery):
 
 
 async def show_pair_page(callback: CallbackQuery, offset):
-    pairs = {}
+    pairs = {pair: {"count": 0, "last_id": None} for pair in TRACKED_BINARY_PAIRS}
     with connect_db() as conn:
         posts = conn.execute("SELECT message_id, text FROM source_posts ORDER BY created_at DESC").fetchall()
     for message_id, body in posts:
@@ -704,6 +763,19 @@ async def binary_recent_signals(callback: CallbackQuery):
         for pair in pairs:
             counts[pair] = counts.get(pair, 0) + 1
             total += 1
+    if not posts:
+        await callback.message.edit_text(
+            "📈 <b>СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "Ожидаем сигналы в этом боте.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [colored_button("🔄 Обновить", "binary_recent_10", "primary")],
+                [colored_button("⬅️ Назад", "binary_menu", "primary")],
+            ]),
+        )
+        await callback.answer()
+        return
+
     lines = ["📊 <b>СТАТИСТИКА ЗА ПОСЛЕДНИЕ 10 МИНУТ</b>", "━━━━━━━━━━━━━━━━━━"]
     if counts:
         lines.extend(f"\n💱 <b>{pair}</b> — {count} сигнал(ов)" for pair, count in sorted(counts.items(), key=lambda x: (-x[1], x[0])))
@@ -943,15 +1015,12 @@ async def statistics_handler(message: Message):
             wins += 1
         elif marker == "❌":
             losses += 1
-    pending = len(recent_signals) - wins - losses
-
     await message.answer(
         "📊 РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 24 ЧАСА\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         f"📨 Сигналов за сутки: {len(recent_signals)}\n"
         f"✅ WIN: {wins}\n"
-        f"❌ LOSS: {losses}\n"
-        f"⏳ Без указанного результата: {pending}"
+        f"❌ LOSS: {losses}"
     )
 
 
@@ -1189,13 +1258,18 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
     post_text = message.text or message.caption or ""
     posted_at = now()
 
-    # Atomic insert protects against duplicate processing of the same post.
+    # Claim the source post once. Duplicate Telegram updates must never trigger
+    # a second broadcast, including when another poller receives the same post.
     try:
         with connect_db() as conn:
-            conn.execute("""
+            inserted = conn.execute("""
                 INSERT INTO source_posts (message_id, text, created_at, updated_at)
                 VALUES (?, ?, ?, ?)
-            """, (message.message_id, post_text, posted_at, posted_at))
+                ON CONFLICT DO NOTHING
+            """, (message.message_id, post_text, posted_at, posted_at)).rowcount
+            if not inserted:
+                log.info("Duplicate source post %s ignored.", message.message_id)
+                return
             conn.execute("""
                 INSERT INTO signals
                 (instrument, direction, timeframe, details, created_at, created_by)
@@ -1208,8 +1282,6 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                 posted_at,
                 0,
             ))
-    except sqlite3.IntegrityError:
-        log.info("Source entry already exists; checking for pending deliveries.")
     except sqlite3.Error:
         log.exception("Could not save source-channel entry.")
         return
@@ -1307,6 +1379,7 @@ async def admin_start(message: Message):
         "🛡 QUANTUM TRADE AI\n"
         "ПАНЕЛЬ УПРАВЛЕНИЯ\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
+        f"👥 Всего пользователей: {get_total_user_count()}\n\n"
         "Выберите нужный раздел:",
         reply_markup=admin_keyboard(),
     )
@@ -1374,6 +1447,11 @@ async def admin_stats(message: Message):
         f"🔴 Заблокированных: {blocked}\n"
         f"📨 Записей сигналов: {signals}"
     )
+
+
+def get_total_user_count():
+    with connect_db() as conn:
+        return conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
 
 
 # =========================================================
@@ -1444,18 +1522,21 @@ async def publish_signal(message: Message, bot: Bot):
         return
     action_key = f"signal:{message.chat.id}:{message.message_id}"
     with connect_db() as conn:
-        try:
-            conn.execute("INSERT INTO admin_actions (action_key, created_at) VALUES (?, ?)", (action_key, now()))
-        except sqlite3.IntegrityError:
-            await message.answer("Эта команда уже обработана; повторная рассылка отменена.")
-            return
+        inserted = conn.execute(
+            "INSERT INTO admin_actions (action_key, created_at) VALUES (?, ?) "
+            "ON CONFLICT DO NOTHING",
+            (action_key, now()),
+        ).rowcount
+    if not inserted:
+        await message.answer("Эта команда уже обработана; повторная рассылка отменена.")
+        return
 
     with connect_db() as conn:
         cursor = conn.execute("""
             INSERT INTO signals
             (instrument, direction, timeframe, details, created_at, created_by)
             VALUES (?, ?, ?, ?, ?, ?)
-        """, (
+        """ + (" RETURNING id" if DATABASE_URL else ""), (
             instrument,
             direction,
             timeframe,
@@ -1463,7 +1544,7 @@ async def publish_signal(message: Message, bot: Bot):
             now(),
             message.from_user.id,
         ))
-        signal_id = cursor.lastrowid
+        signal_id = cursor.fetchone()[0] if DATABASE_URL else cursor.lastrowid
 
         recipients = conn.execute("""
             SELECT user_id
@@ -1519,11 +1600,14 @@ async def broadcast(message: Message, bot: Bot):
 
     action_key = f"broadcast:{message.chat.id}:{message.message_id}"
     with connect_db() as conn:
-        try:
-            conn.execute("INSERT INTO admin_actions (action_key, created_at) VALUES (?, ?)", (action_key, now()))
-        except sqlite3.IntegrityError:
-            await message.answer("Эта рассылка уже обработана; повторная отправка отменена.")
-            return
+        inserted = conn.execute(
+            "INSERT INTO admin_actions (action_key, created_at) VALUES (?, ?) "
+            "ON CONFLICT DO NOTHING",
+            (action_key, now()),
+        ).rowcount
+    if not inserted:
+        await message.answer("Эта рассылка уже обработана; повторная отправка отменена.")
+        return
 
     with connect_db() as conn:
         users = conn.execute("""
@@ -1749,7 +1833,9 @@ async def admin_buttons(callback: CallbackQuery):
 
     if data == "admin_home":
         await callback.message.edit_text(
-            "🛡 <b>QUANTUM TRADE AI · ПАНЕЛЬ УПРАВЛЕНИЯ</b>\n\nВыберите раздел:",
+            "🛡 <b>QUANTUM TRADE AI · ПАНЕЛЬ УПРАВЛЕНИЯ</b>\n\n"
+            f"👥 Всего пользователей: {get_total_user_count()}\n\n"
+            "Выберите раздел:",
             reply_markup=admin_keyboard(),
         )
         await callback.answer()

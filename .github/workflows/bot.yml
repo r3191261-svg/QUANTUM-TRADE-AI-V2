@@ -52,6 +52,7 @@ jobs:
           OWNER_ID: ${{ secrets.OWNER_ID }}
           DEFAULT_ADMIN_ID: ${{ secrets.DEFAULT_ADMIN_ID }}
           ADMIN_IDS: ${{ secrets.ADMIN_IDS }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           NEWS_RSS_URL: ${{ vars.NEWS_RSS_URL }}
           NEWS_POLL_SECONDS: ${{ vars.NEWS_POLL_SECONDS }}
           NEWS_REPUBLISH_ALLOWED: ${{ vars.NEWS_REPUBLISH_ALLOWED }}
