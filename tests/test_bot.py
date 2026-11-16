@@ -207,6 +207,15 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("20. <code>FIL/USDT</code>", callback.message.text)
         self.assertEqual(callback.message.reply_markup.inline_keyboard[0][0].callback_data, "binary_menu")
 
+    async def test_signal_history_normalizes_status_and_hides_source_checkmark_noise(self):
+        self.assertEqual(bot.signal_result_marker("GBPJPY m5 вверх ⌛\n✅"), "⏳")
+        self.assertEqual(bot.signal_result_marker("GBPCHF m5 вверх ⭕"), "⭕")
+        self.assertEqual(bot.signal_result_marker("AUDJPY m5 вверх ✔"), "✅")
+        self.assertEqual(
+            bot.compact_signal_text("GBPJPY m5 вверх ⌛\n✅"),
+            "GBP/JPY · m5 · вверх",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

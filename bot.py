@@ -100,6 +100,12 @@ CUSTOM_EMOJI_PACK_NAMES = tuple(
 )
 _CUSTOM_EMOJI_PACK = None
 _CUSTOM_EMOJI_INDEX = {}
+_CUSTOM_EMOJI_FALLBACK_IDS = []
+ANIMATED_EMOJI_TARGETS = (
+    "🗓", "🔤", "⭕", "⏳", "🤖", "➡️", "🇷🇺", "🇦🇮", "🇬🇧", "📃", "🚬",
+    "❗️", "🟢", "📴", "👤", "✏️", "🗞", "🛜", "📈", "📊", "🕘", "🔔",
+    "✅", "❌", "📅", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫",
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -824,7 +830,7 @@ def remove_emoji_characters(text):
 
 async def setup_custom_emojis(bot):
     """Load the configured emoji pack and install outgoing message decoration."""
-    global _CUSTOM_EMOJI_PACK
+    global _CUSTOM_EMOJI_PACK, _CUSTOM_EMOJI_FALLBACK_IDS
     middleware_manager = getattr(getattr(bot, "session", None), "middleware", None)
     if middleware_manager is not None and not any(
         isinstance(item, CustomEmojiRequestMiddleware) for item in middleware_manager
@@ -849,6 +855,7 @@ async def setup_custom_emojis(bot):
                 )
                 if custom_id and is_animated and is_single_emoji_fallback(emoji):
                     _CUSTOM_EMOJI_PACK.setdefault(emoji, []).append(custom_id)
+                    _CUSTOM_EMOJI_FALLBACK_IDS.append(custom_id)
                     pack_count += 1
             log.info("Loaded %d custom emojis from %s", pack_count, pack_name)
         except Exception:
@@ -858,7 +865,9 @@ async def setup_custom_emojis(bot):
 
 def next_custom_emoji_id(emoji):
     """Cycle through matching stickers from the configured sets for visual variety."""
-    sticker_ids = (_CUSTOM_EMOJI_PACK or {}).get(emoji, ())
+    sticker_ids = (_CUSTOM_EMOJI_PACK or {}).get(emoji, ()) or (
+        _CUSTOM_EMOJI_FALLBACK_IDS if emoji in ANIMATED_EMOJI_TARGETS else ()
+    )
     if not sticker_ids:
         return None
     index = _CUSTOM_EMOJI_INDEX.get(emoji, 0)
@@ -876,7 +885,7 @@ def render_custom_emojis(text):
     # Keep these two result states readable even when a selected pack has no
     # animated equivalent for them. When it does, they are replaced normally.
     for marker in ("⭕", "⏳"):
-        if marker not in (_CUSTOM_EMOJI_PACK or {}):
+        if marker not in (_CUSTOM_EMOJI_PACK or {}) and not _CUSTOM_EMOJI_FALLBACK_IDS:
             placeholder = f"\x00RESULT_MARKER_{len(visible_fallbacks)}\x00"
             visible_fallbacks.append((placeholder, marker))
             text = text.replace(marker, placeholder)
@@ -898,6 +907,9 @@ def render_custom_emojis(text):
         for emoji, custom_ids in _CUSTOM_EMOJI_PACK.items()
         if emoji and custom_ids
     }
+    for emoji in ANIMATED_EMOJI_TARGETS:
+        if emoji not in emoji_map and _CUSTOM_EMOJI_FALLBACK_IDS:
+            emoji_map[emoji] = _CUSTOM_EMOJI_FALLBACK_IDS
     if not emoji_map:
         text = remove_emoji_characters(text)
         for placeholder, marker in visible_fallbacks:
@@ -1505,13 +1517,29 @@ async def calendar_handler(message: Message):
 
 def signal_result_marker(details):
     result_text = (details or "").upper()
-    win = re.search(r"\b(WIN|WON|ВЫИГРЫШ|ПРИБЫЛЬ)\b|✅", result_text)
-    loss = re.search(r"\b(LOSS|LOSE|ПРОИГРЫШ|УБЫТОК)\b|❌|⭕|✖️|➖", result_text)
-    if loss and (not win or loss.start() > win.start()):
+    # Explicit loss/wait indicators take precedence over decorative checkmarks
+    # that may be part of a forwarded signal's design.
+    if re.search(r"\b(LOSS|LOSE|ПРОИГРЫШ|УБЫТОК)\b|❌|⭕|✖️|➖|🔴", result_text):
         return "⭕"
-    if win:
+    if re.search(r"\b(WAIT|WAITING|ОЖИДАНИЕ|ЖДЁМ|ЖДЕМ)\b|⏳|⌛", result_text):
+        return "⏳"
+    if re.search(r"\b(WIN|WON|ВЫИГРЫШ|ПРИБЫЛЬ)\b|✅|☑|✔|🗸|✓", result_text):
         return "✅"
     return "⏳"
+
+
+def compact_signal_text(details):
+    """Summarize a source post without copying decorative/check result emoji."""
+    raw = html.unescape(re.sub(r"<[^>]+>", " ", details or ""))
+    pairs = sorted(extract_pairs(raw))
+    timeframe = re.search(r"\b([mhdw])\s*(\d+)\b", raw, re.IGNORECASE)
+    direction = re.search(r"\b(вверх|вниз|рост|падение|buy|sell|call|put|up|down)\b", raw, re.IGNORECASE)
+    parts = [", ".join(pairs[:3]) if pairs else "Сигнал"]
+    if timeframe:
+        parts.append(f"{timeframe.group(1).lower()}{timeframe.group(2)}")
+    if direction:
+        parts.append(direction.group(1).lower())
+    return " · ".join(parts)
 
 
 @user_dp.message(Command("stats"))
@@ -1589,12 +1617,10 @@ async def history_handler(message: Message):
         await message.answer("🕘 История сигналов пока пуста.")
         return
 
-    text = "🕘 ИСТОРИЯ СИГНАЛОВ ЗА 24 ЧАСА\n━━━━━━━━━━━━━━━━━━\n"
+    text = "<b>🕘 ИСТОРИЯ СИГНАЛОВ ЗА 24 ЧАСА</b>\n━━━━━━━━━━━━━━━━━━\n"
 
     for row in channel_rows:
-        body = (row[1] or "[Публикация без текста]").strip()
-        if len(body) > 500:
-            body = body[:500] + "…"
+        body = (row[1] or "").strip()
         created_at = row[2]
         try:
             signal_time = datetime.fromisoformat(created_at).astimezone(
@@ -1603,8 +1629,8 @@ async def history_handler(message: Message):
         except (TypeError, ValueError):
             signal_time = (created_at or "время не указано")[-8:-3] if created_at else "время не указано"
         text += (
-            f"\n{signal_result_marker(body)} {signal_time} · "
-            f"{html.escape(body)}\n"
+            f"\n{signal_result_marker(body)} <b>{signal_time}</b> · "
+            f"<b>{html.escape(compact_signal_text(body))}</b>\n"
             "──────────────\n"
         )
 
@@ -1616,11 +1642,8 @@ async def history_handler(message: Message):
         except (TypeError, ValueError):
             manual_time = (row[5] or "время не указано")[-8:-3] if row[5] else "время не указано"
         text += (
-            f"\n{signal_result_marker(row[4])} #{row[0]} | {html.escape(row[1] or '')}\n"
-            f"Направление: {html.escape(row[2] or '')}\n"
-            f"Таймфрейм: {html.escape(row[3] or '')}\n"
-            f"Комментарий: {html.escape(row[4] or '')}\n"
-            f"Время: {manual_time}\n"
+            f"\n{signal_result_marker(row[4])} <b>{manual_time} · {html.escape(row[1] or '')}</b>\n"
+            f"<b>{html.escape(row[2] or '')} · {html.escape(row[3] or '')}</b>\n"
             "──────────────\n"
         )
 
@@ -1776,22 +1799,23 @@ async def my_signals_handler(message: Message):
         ).fetchall()
     matching = []
     for text, created_at in source_rows:
-        matching.append((text, created_at))
+        matching.append((compact_signal_text(text), text, created_at))
     for instrument, direction, timeframe, details, created_at in manual_rows:
         matching.append((
-            f"{instrument} · {direction} · {timeframe}\n{details or ''}",
+            f"{instrument} · {direction} · {timeframe}",
+            details or "",
             created_at,
         ))
-    matching.sort(key=lambda item: item[1] or "", reverse=True)
+    matching.sort(key=lambda item: item[2] or "", reverse=True)
     text = (
-        "📈 МОИ СИГНАЛЫ\n━━━━━━━━━━━━━━━━━━\n"
+        "<b>📈 МОИ СИГНАЛЫ</b>\n━━━━━━━━━━━━━━━━━━\n"
         "Последние опубликованные сигналы\n"
     )
     if not matching:
         text += "\nСигналов с выбранными парами и интервалом пока нет."
     else:
-        for body, created_at in matching[:10]:
-            text += f"\n{signal_result_marker(body)} {created_at or 'время не указано'}\n{html.escape(body[:550])}\n──────────────\n"
+        for summary, details, created_at in matching[:10]:
+            text += f"\n{signal_result_marker(details)} <b>{created_at or 'время не указано'}</b>\n<b>{html.escape(summary)}</b>\n──────────────\n"
     await message.answer(text[:4000])
 
 
