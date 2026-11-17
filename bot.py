@@ -103,7 +103,7 @@ CUSTOM_EMOJI_PACK_NAMES = tuple(
 _CUSTOM_EMOJI_PACK = None
 ANIMATED_EMOJI_TARGETS = (
     "🗓", "📅", "🕘", "🕒", "🤖", "➡️", "🇷🇺", "🇬🇧", "✏️", "🗞", "🛜", "📈", "📊",
-    "🔔", "✅", "❌", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫",
+    "🔔", "✅", "❌", "⌛", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫", "👤",
 )
 BUTTON_EMOJI_TARGETS = tuple(dict.fromkeys((*ANIMATED_EMOJI_TARGETS, "👤")))
 ANIMATED_EMOJI_ALIASES = {
@@ -969,7 +969,7 @@ RU_EN_TRANSLATIONS = {
     "НЕАКТИВЕН": "INACTIVE",
     "Выберите нужный раздел в меню.": "Choose a section from the menu.",
     "Выберите нужный раздел:": "Choose a section:",
-    "Просто выберите действие.": "Please choose an action.",
+    "ВЫБЕРИТЕ ДЕЙСТВИЕ:": "CHOOSE AN ACTION:",
     "История сигналов пока пуста.": "Signal history is empty.",
     "Сигналов за сутки": "Signals in the last 24 hours",
     "Профиль": "Profile",
@@ -1212,7 +1212,12 @@ class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
         for field in ("text", "caption"):
             value = getattr(method, field, None)
             entities_field = "caption_entities" if field == "caption" else "entities"
-            if value and hasattr(method, "parse_mode") and not getattr(method, entities_field, None):
+            if (
+                value
+                and hasattr(method, "parse_mode")
+                and getattr(method, "parse_mode", None) is not None
+                and not getattr(method, entities_field, None)
+            ):
                 if language == "en":
                     value = translate_to_english(value)
                 rendered = render_custom_emojis(value)
@@ -1642,6 +1647,11 @@ def history_signal_marker(details):
     }[signal_result_kind(details)]
 
 
+def is_signal_record(instrument, details):
+    """Count only records that identify at least one supported market pair."""
+    return bool(extract_pairs(f"{instrument or ''} {details or ''}"))
+
+
 def compact_signal_text(details):
     """Summarize a source post without copying decorative/check result emoji."""
     raw = html.unescape(re.sub(r"<[^>]+>", " ", details or ""))
@@ -1664,17 +1674,21 @@ async def statistics_handler(message: Message):
 
     since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     with connect_db() as conn:
-        source_signals = conn.execute(
+        source_rows = conn.execute(
             "SELECT text FROM source_posts "
             "WHERE created_at >= ? OR COALESCE(updated_at, created_at) >= ?",
             (since, since),
         ).fetchall()
         manual_signals = conn.execute(
-            "SELECT details FROM signals "
+            "SELECT instrument, details FROM signals "
             "WHERE (created_by != 0 OR created_by IS NULL) AND created_at >= ?",
             (since,),
         ).fetchall()
-    recent_signals = source_signals + manual_signals
+    recent_signals = [text for (text,) in source_rows if is_signal_record("", text)]
+    recent_signals.extend(
+        details for instrument, details in manual_signals
+        if is_signal_record(instrument, details)
+    )
 
     wins = 0
     losses = 0
@@ -1727,6 +1741,9 @@ async def history_handler(message: Message):
             LIMIT 50
         """, (since,)).fetchall()
 
+    channel_rows = [row for row in channel_rows if is_signal_record("", row[1])][:50]
+    manual_rows = [row for row in manual_rows if is_signal_record(row[1], row[4])]
+
     if not channel_rows and not manual_rows:
         await message.answer("🕘 История сигналов пока пуста.")
         return
@@ -1769,7 +1786,7 @@ async def autotrade_handler(message: Message):
     await message.answer(
         "<b>🛡 QUANTUM TRADE AI — 🤖 АВТОМАТИЧЕСКИЙ БОТ</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        "Просто выберите действие.",
+        "ВЫБЕРИТЕ ДЕЙСТВИЕ:",
         reply_markup=autotrade_keyboard(),
     )
 
@@ -2048,18 +2065,23 @@ async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_r
 
     original = message.text or message.caption or ""
     status_emojis = re.compile(r"✅|☑️?|✔️?|🗸|✓|⏳|⌛|⭕|❌|✖️?|➖|🔴")
-    if not status_emojis.search(original):
+    has_result_marker = bool(status_emojis.search(original))
+    if not has_result_marker and not allow_regular_fallback:
         return
-    marker = signal_result_marker(original)
     normalized = status_emojis.sub("", original)
     normalized = re.sub(r"[ \t]{2,}", " ", normalized)
     normalized = re.sub(r" *\n *", "\n", normalized).strip()
-    decorated = html.escape(f"{normalized} {marker}".strip())
+    decorated = (
+        f"{normalized} {history_signal_marker(original)}".strip()
+        if has_result_marker else original
+    )
     common = {
         "chat_id": user_id,
         "message_id": copied_message_id,
         "reply_markup": signal_action_keyboard(),
-        "parse_mode": ParseMode.HTML,
+        # Signal copies intentionally keep ordinary Unicode emoji. The global
+        # request middleware skips emoji conversion when parse_mode is None.
+        "parse_mode": None,
     }
     try:
         if field == "text":
@@ -2186,6 +2208,10 @@ async def signals_pro_edited_handler(message: Message, bot: Bot):
             "UPDATE source_posts SET text=?, updated_at=? WHERE message_id=?",
             (source_text, now(), message.message_id),
         )
+        conn.execute(
+            "UPDATE signals SET details=? WHERE source_message_id=?",
+            (source_text[:3000], message.message_id),
+        )
         deliveries = conn.execute(
             "SELECT user_id, copied_message_id FROM source_deliveries WHERE source_message_id=?",
             (message.message_id,),
@@ -2279,9 +2305,10 @@ async def admin_stats(message: Message):
         blocked = conn.execute(
             "SELECT COUNT(*) FROM users WHERE status='blocked'"
         ).fetchone()[0]
-        signals = conn.execute(
-            "SELECT COUNT(*) FROM signals"
-        ).fetchone()[0]
+        signal_rows = conn.execute(
+            "SELECT instrument, details FROM signals"
+        ).fetchall()
+        signals = sum(is_signal_record(instrument, details) for instrument, details in signal_rows)
     await message.answer(
         "📊 СТАТИСТИКА ПЛАТФОРМЫ\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
@@ -2831,9 +2858,10 @@ async def admin_buttons(callback: CallbackQuery):
             blocked = conn.execute(
                 "SELECT COUNT(*) FROM users WHERE status='blocked'"
             ).fetchone()[0]
-            signals = conn.execute(
-                "SELECT COUNT(*) FROM signals"
-            ).fetchone()[0]
+            signal_rows = conn.execute(
+                "SELECT instrument, details FROM signals"
+            ).fetchall()
+            signals = sum(is_signal_record(instrument, details) for instrument, details in signal_rows)
         await callback.message.edit_text(
             "📊 СТАТИСТИКА QUANTUM TRADE AI\n"
             "━━━━━━━━━━━━━━━━━━\n\n"
