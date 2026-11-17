@@ -103,7 +103,7 @@ CUSTOM_EMOJI_PACK_NAMES = tuple(
 _CUSTOM_EMOJI_PACK = None
 ANIMATED_EMOJI_TARGETS = (
     "🗓", "📅", "🕘", "🕒", "🤖", "➡️", "🇷🇺", "🇬🇧", "✏️", "🗞", "🛜", "📈", "📊",
-    "🔔", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫",
+    "🔔", "✅", "❌", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫",
 )
 BUTTON_EMOJI_TARGETS = tuple(dict.fromkeys((*ANIMATED_EMOJI_TARGETS, "👤")))
 ANIMATED_EMOJI_ALIASES = {
@@ -1599,17 +1599,22 @@ async def calendar_handler(message: Message):
 # STATISTICS
 # =========================================================
 
-def signal_result_marker(details):
+def signal_result_kind(details):
     result_text = (details or "").upper()
     # Explicit loss/wait indicators take precedence over decorative checkmarks
     # that may be part of a forwarded signal's design.
     if re.search(r"\b(LOSS|LOSE|ПРОИГРЫШ|УБЫТОК)\b|❌|⭕|✖️|➖|🔴", result_text):
-        return "❌"
+        return "loss"
     if re.search(r"\b(WAIT|WAITING|ОЖИДАНИЕ|ЖДЁМ|ЖДЕМ)\b|⏳|⌛", result_text):
-        return "⏳"
+        return "wait"
     if re.search(r"\b(WIN|WON|ВЫИГРЫШ|ПРИБЫЛЬ)\b|✅|☑|✔|🗸|✓", result_text):
-        return "✅"
-    return "⏳"
+        return "win"
+    return "wait"
+
+
+def signal_result_marker(details):
+    """Use one animated check for WIN and WAIT, and an animated cross for LOSS."""
+    return "❌" if signal_result_kind(details) == "loss" else "✅"
 
 
 def compact_signal_text(details):
@@ -1649,10 +1654,10 @@ async def statistics_handler(message: Message):
     wins = 0
     losses = 0
     for (details,) in recent_signals:
-        marker = signal_result_marker(details)
-        if marker == "✅":
+        result_kind = signal_result_kind(details)
+        if result_kind == "win":
             wins += 1
-        elif marker == "❌":
+        elif result_kind == "loss":
             losses += 1
     await message.answer(
         "📊 РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 24 ЧАСА\n"

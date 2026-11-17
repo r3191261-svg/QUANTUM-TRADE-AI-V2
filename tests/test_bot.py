@@ -223,8 +223,10 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(callback.message.reply_markup.inline_keyboard[0][0].callback_data, "binary_menu")
 
     async def test_signal_history_normalizes_status_and_hides_source_checkmark_noise(self):
-        self.assertEqual(bot.signal_result_marker("GBPJPY m5 вверх ⌛\n✅"), "⏳")
+        self.assertEqual(bot.signal_result_marker("GBPJPY m5 вверх ⌛\n✅"), "✅")
+        self.assertEqual(bot.signal_result_kind("GBPJPY m5 вверх ⌛\n✅"), "wait")
         self.assertEqual(bot.signal_result_marker("GBPCHF m5 вверх ⭕"), "❌")
+        self.assertEqual(bot.signal_result_kind("GBPCHF m5 вверх ⭕"), "loss")
         self.assertEqual(bot.signal_result_marker("AUDJPY m5 вверх ✔"), "✅")
         self.assertEqual(
             bot.compact_signal_text("GBPJPY m5 вверх ⌛\n✅"),
@@ -243,7 +245,7 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         try:
             bot._CUSTOM_EMOJI_PACK = {
                 "🤖": ["robot-id"], "✨": ["sparkle-id"], "🗓": ["calendar-id"],
-                "✅": ["check-id"], "⌛": ["hourglass-id"], "✖️": ["cross-id"],
+                "✅": ["check-id"], "❌": ["cross-id"], "✖️": ["cross-id"],
             }
             markup = bot.ReplyKeyboardMarkup(
                 keyboard=[[bot.KeyboardButton(text="🗓 Экономический календарь")]],
@@ -255,11 +257,12 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(button.text, "Экономический календарь")
             rendered = bot.render_custom_emojis("🤖 ✅ 🗓 🧾 🅰️ QUANTUM TRADE AI")
             self.assertIn('emoji-id="robot-id"', rendered)
-            self.assertIn("✅", rendered)
+            self.assertIn('emoji-id="check-id"', rendered)
             self.assertIn('emoji-id="calendar-id"', rendered)
             self.assertIn("🧾", rendered)
             self.assertIn("🅰️", rendered)
-            self.assertEqual(bot.render_custom_emojis("❌ ⏳"), "❌ ⏳")
+            self.assertEqual(bot.render_custom_emojis("⏳"), "⏳")
+            self.assertIn('emoji-id="cross-id"', bot.render_custom_emojis("❌"))
             self.assertIn("🛡 QUANTUM TRADE AI", rendered)
             status_id = bot.next_custom_emoji_id("❌")
             self.assertEqual(bot.next_custom_emoji_id("❌"), status_id)
