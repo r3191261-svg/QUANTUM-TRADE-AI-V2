@@ -35,6 +35,9 @@ class FakeMessage:
         self.text = text
         self.reply_markup = reply_markup
 
+    async def edit_reply_markup(self, reply_markup=None):
+        self.reply_markup = reply_markup
+
     async def answer(self, text, reply_markup=None):
         self.answers.append((text, reply_markup))
 
@@ -183,8 +186,9 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("14659", text)
         self.assertNotIn("Статус подключения", text)
         registration, support = markup.inline_keyboard[0][0], markup.inline_keyboard[1][0]
-        self.assertEqual(registration.style, "primary")
+        self.assertEqual(registration.style, "success")
         self.assertEqual(support.style, "success")
+        self.assertEqual(registration.callback_data, "choose_broker")
         self.assertIsNone(support.callback_data)
         self.assertEqual(registration.text, "➡️ Регистрация у брокера")
         self.assertEqual(support.text, "➡️ Подключить автоторговлю")
@@ -193,6 +197,17 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("готовое сообщение", text.lower())
         self.assertNotIn("Здравствуйте! 🤝 Хочу подключить автоторговлю!", text)
         self.assertNotIn("отправьте администратору сообщение", text.lower())
+
+    async def test_registration_button_opens_two_green_broker_links(self):
+        callback = FakeCallback("choose_broker", user_id=101)
+        await bot.broker_choice_handler(callback)
+        choices = callback.message.reply_markup.inline_keyboard
+        self.assertEqual(len(choices), 2)
+        intrade, binodex = (row[0] for row in choices)
+        self.assertEqual((intrade.text, intrade.url, intrade.style),
+                         ("INTRADE BAR", "https://clck.ru/3X2xAM", "success"))
+        self.assertEqual((binodex.text, binodex.url, binodex.style),
+                         ("BinoDex", "https://bdclick.app/smart/DLreJY", "success"))
 
     async def test_binary_menu_hides_crypto_list_and_exposes_binary_signals(self):
         labels = [row[0].text for row in bot.binary_menu_keyboard().inline_keyboard]
@@ -240,12 +255,11 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(button.text, "Экономический календарь")
             rendered = bot.render_custom_emojis("🤖 ✅ 🗓 🧾 🅰️ QUANTUM TRADE AI")
             self.assertIn('emoji-id="robot-id"', rendered)
-            self.assertIn('emoji-id="check-id"', rendered)
+            self.assertIn("✅", rendered)
             self.assertIn('emoji-id="calendar-id"', rendered)
             self.assertIn("🧾", rendered)
             self.assertIn("🅰️", rendered)
-            self.assertIn('emoji-id="cross-id"', bot.render_custom_emojis("❌"))
-            self.assertIn('emoji-id="hourglass-id"', bot.render_custom_emojis("⏳"))
+            self.assertEqual(bot.render_custom_emojis("❌ ⏳"), "❌ ⏳")
             self.assertIn("🛡 QUANTUM TRADE AI", rendered)
             status_id = bot.next_custom_emoji_id("❌")
             self.assertEqual(bot.next_custom_emoji_id("❌"), status_id)

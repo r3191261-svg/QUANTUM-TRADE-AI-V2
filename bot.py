@@ -75,6 +75,7 @@ NEWS_REPUBLISH_ALLOWED = os.getenv("NEWS_REPUBLISH_ALLOWED", "false").strip().lo
 AUTOTRADE_DRAFT = "Здравствуйте! 🤝 Хочу подключить автоторговлю!"
 SUPPORT_URL = "https://t.me/copy_broker_BO_bot?text=" + quote(AUTOTRADE_DRAFT)
 REGISTRATION_URL = "https://clck.ru/3X2xAM"
+BINODEX_REGISTRATION_URL = "https://bdclick.app/smart/DLreJY"
 LOCAL_TZ = timezone(timedelta(hours=5), "Asia/Tashkent")
 
 # ISO 4217 currency codes plus commonly quoted crypto tickers. Signals are
@@ -101,8 +102,8 @@ CUSTOM_EMOJI_PACK_NAMES = tuple(
 )
 _CUSTOM_EMOJI_PACK = None
 ANIMATED_EMOJI_TARGETS = (
-    "🗓", "📅", "🕘", "🕒", "⏳", "🤖", "➡️", "🇷🇺", "🇬🇧", "✏️", "🗞", "🛜", "📈", "📊",
-    "🔔", "✅", "❌", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫",
+    "🗓", "📅", "🕘", "🕒", "🤖", "➡️", "🇷🇺", "🇬🇧", "✏️", "🗞", "🛜", "📈", "📊",
+    "🔔", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫",
 )
 BUTTON_EMOJI_TARGETS = tuple(dict.fromkeys((*ANIMATED_EMOJI_TARGETS, "👤")))
 ANIMATED_EMOJI_ALIASES = {
@@ -599,7 +600,7 @@ def signal_action_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="➡️ Регистрация у брокера",
-            url=REGISTRATION_URL,
+            callback_data="choose_broker",
             style="success",
         )],
         [InlineKeyboardButton(
@@ -607,6 +608,13 @@ def signal_action_keyboard():
             url=SUPPORT_URL,
             style="success",
         )],
+    ])
+
+
+def broker_choice_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="INTRADE BAR", url=REGISTRATION_URL, style="success")],
+        [InlineKeyboardButton(text="BinoDex", url=BINODEX_REGISTRATION_URL, style="success")],
     ])
 
 
@@ -1731,8 +1739,8 @@ async def autotrade_handler(message: Message):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="➡️ Регистрация у брокера",
-            url=REGISTRATION_URL,
-            style="primary",
+            callback_data="choose_broker",
+            style="success",
         )],
         [InlineKeyboardButton(
             text="➡️ Подключить автоторговлю",
@@ -1747,6 +1755,16 @@ async def autotrade_handler(message: Message):
         "Просто выберите действие.",
         reply_markup=keyboard,
     )
+
+
+@user_dp.callback_query(F.data == "choose_broker")
+async def broker_choice_handler(callback: CallbackQuery):
+    user = get_user(callback.from_user.id)
+    if not user or user[3] != "active":
+        await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
+        return
+    await callback.message.edit_reply_markup(reply_markup=broker_choice_keyboard())
+    await callback.answer()
 
 
 @user_dp.callback_query(F.data == "support_admin")
