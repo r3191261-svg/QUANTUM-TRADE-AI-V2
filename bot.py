@@ -1812,6 +1812,11 @@ async def broker_choice_handler(callback: CallbackQuery):
     await _show_broker_choices(callback, back_callback)
 
 
+async def broker_choice_from_signal_handler(callback: CallbackQuery):
+    """Compatibility entry point for callers opening broker links from a signal."""
+    await _show_broker_choices(callback, "broker_back_signal")
+
+
 @user_dp.callback_query(F.data == "broker_back_autotrade")
 async def broker_back_autotrade_handler(callback: CallbackQuery):
     user = get_user(callback.from_user.id)
