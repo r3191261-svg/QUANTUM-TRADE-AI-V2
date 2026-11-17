@@ -1633,6 +1633,15 @@ def signal_result_marker(details):
     return "❌" if signal_result_kind(details) == "loss" else "✅"
 
 
+def history_signal_marker(details):
+    """Show the requested plain result markers in the signal history only."""
+    return {
+        "win": "✅",
+        "loss": "➖",
+        "wait": "⌛",
+    }[signal_result_kind(details)]
+
+
 def compact_signal_text(details):
     """Summarize a source post without copying decorative/check result emoji."""
     raw = html.unescape(re.sub(r"<[^>]+>", " ", details or ""))
@@ -1727,14 +1736,14 @@ async def history_handler(message: Message):
     for row in channel_rows:
         body = (row[1] or "").strip()
         text += (
-            f"\n{signal_result_marker(body)} <b>{html.escape(compact_signal_text(body))}</b>\n"
+            f"\n<b>{html.escape(compact_signal_text(body))}</b> {history_signal_marker(body)}\n"
             "──────────────\n"
         )
 
     for row in manual_rows:
         text += (
-            f"\n{signal_result_marker(row[4])} <b>{html.escape(row[1] or '')}</b>\n"
-            f"<b>{html.escape(row[2] or '')} · {html.escape(row[3] or '')}</b>\n"
+            f"\n<b>{html.escape(row[1] or '')} · {html.escape(row[3] or '')} · "
+            f"{html.escape(row[2] or '')}</b> {history_signal_marker(row[4])}\n"
             "──────────────\n"
         )
 
@@ -1776,14 +1785,14 @@ async def _show_broker_choices(callback: CallbackQuery, back_callback: str):
     await callback.answer()
 
 
-@user_dp.callback_query(F.data.in_({"choose_broker", "choose_broker_autotrade"}))
+@user_dp.callback_query(F.data.in_({"choose_broker", "choose_broker_autotrade", "choose_broker_signal"}))
 async def broker_choice_handler(callback: CallbackQuery):
-    await _show_broker_choices(callback, "broker_back_autotrade")
-
-
-@user_dp.callback_query(F.data == "choose_broker_signal")
-async def broker_choice_from_signal_handler(callback: CallbackQuery):
-    await _show_broker_choices(callback, "broker_back_signal")
+    back_callback = (
+        "broker_back_signal"
+        if callback.data == "choose_broker_signal"
+        else "broker_back_autotrade"
+    )
+    await _show_broker_choices(callback, back_callback)
 
 
 @user_dp.callback_query(F.data == "broker_back_autotrade")
