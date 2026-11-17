@@ -1653,28 +1653,14 @@ async def history_handler(message: Message):
 
     for row in channel_rows:
         body = (row[1] or "").strip()
-        created_at = row[2]
-        try:
-            signal_time = datetime.fromisoformat(created_at).astimezone(
-                timezone(timedelta(hours=5))
-            ).strftime("%H:%M")
-        except (TypeError, ValueError):
-            signal_time = (created_at or "время не указано")[-8:-3] if created_at else "время не указано"
         text += (
-            f"\n{signal_result_marker(body)} <b>{signal_time}</b> · "
-            f"<b>{html.escape(compact_signal_text(body))}</b>\n"
+            f"\n{signal_result_marker(body)} <b>{html.escape(compact_signal_text(body))}</b>\n"
             "──────────────\n"
         )
 
     for row in manual_rows:
-        try:
-            manual_time = datetime.fromisoformat(row[5]).astimezone(
-                timezone(timedelta(hours=5))
-            ).strftime("%H:%M")
-        except (TypeError, ValueError):
-            manual_time = (row[5] or "время не указано")[-8:-3] if row[5] else "время не указано"
         text += (
-            f"\n{signal_result_marker(row[4])} <b>{manual_time} · {html.escape(row[1] or '')}</b>\n"
+            f"\n{signal_result_marker(row[4])} <b>{html.escape(row[1] or '')}</b>\n"
             f"<b>{html.escape(row[2] or '')} · {html.escape(row[3] or '')}</b>\n"
             "──────────────\n"
         )
