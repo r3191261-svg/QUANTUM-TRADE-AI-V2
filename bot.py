@@ -90,6 +90,7 @@ DB_PATH = os.getenv("DB_PATH", "quantum.db")
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif")
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
+INTRO_VIDEO_PATH = os.getenv("INTRO_VIDEO_PATH", "assets/quantum_trade_ai_promo.mp4")
 DEFAULT_CUSTOM_EMOJI_PACKS = (
     "svoy_v_alfe,AR_PREMIUM,TrendsEmoji,zholto_rozovij,NewsEmoji"
 )
@@ -717,7 +718,7 @@ async def start_handler(message: Message):
 
     consent = user[7] if user and len(user) > 7 else -1
 
-    welcome_emoji = await custom_emoji_markup(message.bot, "✨")
+    welcome_emoji = await custom_emoji_markup(message.bot, "🤖")
     welcome_text = (
         "⚡ <b>QUANTUM TRADE AI</b>\n\n"
         f"{welcome_emoji} <b>Добро пожаловать в мир интеллектуальной торговли!</b>\n\n"
@@ -726,53 +727,43 @@ async def start_handler(message: Message):
         "взвешенные торговые решения."
     )
     if consent in (0, 1):
-        await message.answer(
-            welcome_text + "\n\n<b>Выберите нужный раздел в меню.</b>",
-            reply_markup=main_keyboard,
+        welcome_text += "\n\n<b>Выберите нужный раздел в меню.</b>"
+        keyboard = main_keyboard
+    else:
+        welcome_text += (
+            "\n\n📊 <b>Хотите получать торговые сигналы и следить за "
+            "возможностями рынка вместе с QUANTUM TRADE AI?</b>"
         )
-        return
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [colored_button("✅ ПРИНЯТЬ", "signals_accept", "success")],
+            [colored_button("❌ ОТКЛОНИТЬ", "signals_decline", "danger")],
+        ])
 
-    welcome_text += (
-        "\n\n📊 <b>Хотите получать торговые сигналы и следить за "
-        "возможностями рынка вместе с QUANTUM TRADE AI?</b>"
+    # Send the supplied promo clip with every /start greeting. Fall back to
+    # the original GIF if the MP4 asset is unavailable in the deployment.
+    video = FSInputFile(INTRO_VIDEO_PATH) if os.path.isfile(INTRO_VIDEO_PATH) else None
+    animation = INTRO_GIF_FILE_ID or (
+        FSInputFile(INTRO_GIF_PATH) if os.path.isfile(INTRO_GIF_PATH) else None
     )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [colored_button("✅ ПРИНЯТЬ", "signals_accept", "success")],
-        [colored_button("❌ ОТКЛОНИТЬ", "signals_decline", "danger")],
-    ])
-    if welcome_emoji != "✨":
-        try:
+    try:
+        if video:
+            await message.answer_video(video, caption=welcome_text, reply_markup=keyboard)
+        elif animation:
+            await message.answer_animation(animation, caption=welcome_text, reply_markup=keyboard)
+        else:
             await message.answer(welcome_text, reply_markup=keyboard)
-            return
-        except TelegramBadRequest:
-            log.exception("Could not use custom emoji pack in welcome message; using fallback")
-            _CUSTOM_EMOJI_PACK = {}
-            welcome_text = re.sub(r'<tg-emoji emoji-id="[^"]+">(.*?)</tg-emoji>', r"\1", welcome_text)
-
-    # If Bot API cannot load/use the emoji pack, retain the bundled intro animation.
-    intro_sent = bool(user and len(user) > 8 and user[8])
-    if not intro_sent:
-        with connect_db() as conn:
-            claimed = conn.execute(
-                "UPDATE users SET intro_sent=1 WHERE user_id=? AND intro_sent=0",
-                (message.from_user.id,),
-            ).rowcount
-        if claimed:
-            try:
-                animation = INTRO_GIF_FILE_ID or (FSInputFile(INTRO_GIF_PATH) if os.path.isfile(INTRO_GIF_PATH) else None)
-                if animation:
-                    await message.answer_animation(animation, caption=welcome_text, reply_markup=keyboard)
-                    return
-            except TelegramAPIError:
-                log.exception("Could not send intro animation; using welcome text")
-                with connect_db() as conn:
-                    conn.execute("UPDATE users SET intro_sent=0 WHERE user_id=?", (message.from_user.id,))
-    await message.answer(welcome_text, reply_markup=keyboard)
+    except TelegramAPIError:
+        log.exception("Could not send welcome video; using text greeting")
+        await message.answer(welcome_text, reply_markup=keyboard)
 
 
 async def custom_emoji_markup(bot, fallback_emoji):
-    """Return a standard Unicode emoji for consistent rendering in Telegram."""
-    return fallback_emoji
+    """Use an exact animated emoji from the configured packs, if available."""
+    global _CUSTOM_EMOJI_PACK
+    if _CUSTOM_EMOJI_PACK is None:
+        await setup_custom_emojis(bot)
+    custom_id = next_custom_emoji_id(fallback_emoji)
+    return custom_emoji_entity(fallback_emoji, custom_id) if custom_id else fallback_emoji
 
 
 def is_single_emoji_fallback(value):
@@ -854,10 +845,8 @@ async def setup_custom_emojis(bot):
 
 
 def next_custom_emoji_id(emoji):
-    """Cycle through matching stickers from the configured sets for visual variety."""
-    sticker_ids = (_CUSTOM_EMOJI_PACK or {}).get(emoji, ()) or (
-        _CUSTOM_EMOJI_FALLBACK_IDS if emoji in ANIMATED_EMOJI_TARGETS else ()
-    )
+    """Cycle only through stickers whose alt emoji exactly matches the target."""
+    sticker_ids = (_CUSTOM_EMOJI_PACK or {}).get(emoji, ())
     if not sticker_ids:
         return None
     index = _CUSTOM_EMOJI_INDEX.get(emoji, 0)
@@ -866,7 +855,29 @@ def next_custom_emoji_id(emoji):
 
 
 def render_custom_emojis(text):
-    """Keep standard emoji untouched; animated packs can render inconsistently."""
+    """Replace only exact pack matches; keep result markers as standard emoji."""
+    if not text or not _CUSTOM_EMOJI_PACK:
+        return text
+    protected = []
+
+    def protect(match):
+        protected.append(match.group(0))
+        return f"\x00CUSTOM_EMOJI_{len(protected) - 1}\x00"
+
+    text = re.sub(r"<tg-emoji\b[^>]*>.*?</tg-emoji>", protect, text, flags=re.S)
+    stable_markers = {"✅", "⭕", "⏳", "❌", "✓", "✔", "☑️"}
+    emoji_map = {
+        emoji: ids for emoji, ids in _CUSTOM_EMOJI_PACK.items()
+        if emoji and ids and emoji not in stable_markers
+    }
+    if emoji_map:
+        pattern = re.compile("|".join(re.escape(item) for item in sorted(emoji_map, key=len, reverse=True)))
+        text = pattern.sub(
+            lambda match: custom_emoji_entity(match.group(0), next_custom_emoji_id(match.group(0))),
+            text,
+        )
+    for index, block in enumerate(protected):
+        text = text.replace(f"\x00CUSTOM_EMOJI_{index}\x00", block)
     return text
 
 

@@ -223,11 +223,11 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(telegram.edits), 1)
         self.assertEqual(telegram.edits[0]["text"], "GBPJPY m5 вверх ✅")
 
-    async def test_custom_emoji_are_left_as_standard_unicode(self):
+    async def test_animated_emoji_require_an_exact_pack_match(self):
         old_pack = bot._CUSTOM_EMOJI_PACK
         old_ids = bot._CUSTOM_EMOJI_FALLBACK_IDS
         try:
-            bot._CUSTOM_EMOJI_PACK = {"✨": ["animated-id"]}
+            bot._CUSTOM_EMOJI_PACK = {"🤖": ["robot-id"], "✨": ["sparkle-id"]}
             bot._CUSTOM_EMOJI_FALLBACK_IDS = ["animated-id"]
             markup = bot.ReplyKeyboardMarkup(
                 keyboard=[[bot.KeyboardButton(text="🗓 Экономический календарь")]],
@@ -237,7 +237,10 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
             button = markup.keyboard[0][0]
             self.assertIsNone(button.icon_custom_emoji_id)
             self.assertEqual(button.text, "🗓 Экономический календарь")
-            self.assertEqual(bot.render_custom_emojis("✅ ⭕ ⏳"), "✅ ⭕ ⏳")
+            rendered = bot.render_custom_emojis("🤖 ✅ 🗓")
+            self.assertIn('emoji-id="robot-id"', rendered)
+            self.assertIn("✅", rendered)
+            self.assertIn("🗓", rendered)
         finally:
             bot._CUSTOM_EMOJI_PACK = old_pack
             bot._CUSTOM_EMOJI_FALLBACK_IDS = old_ids
