@@ -1956,7 +1956,6 @@ async def profile_callback(callback: CallbackQuery):
         f"👤 Имя: {user[2]}\n"
         f"🔗 Username: {username}\n"
         f"❗️ Статус: {'🟢 АКТИВЕН' if user[3] == 'active' else '📴 НЕАКТИВЕН'}\n"
-        f"📅 Регистрация: {user[6]}"
     )
     await callback.answer()
 
