@@ -247,7 +247,7 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_signal_history_normalizes_status_and_hides_source_checkmark_noise(self):
         self.assertEqual(bot.signal_result_marker("GBPJPY m5 вверх ⌛\n✅"), "✅")
-        self.assertEqual(bot.signal_result_kind("GBPJPY m5 вверх ⌛\n✅"), "wait")
+        self.assertEqual(bot.signal_result_kind("GBPJPY m5 вверх ⌛\n✅"), "win")
         self.assertEqual(bot.signal_result_marker("GBPCHF m5 вверх ⭕"), "❌")
         self.assertEqual(bot.signal_result_kind("GBPCHF m5 вверх ⭕"), "loss")
         self.assertEqual(bot.signal_result_marker("AUDJPY m5 вверх ✔"), "✅")

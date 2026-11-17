@@ -7,6 +7,7 @@ import re
 import sqlite3
 import threading
 import unicodedata
+from pathlib import Path
 from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 from contextlib import contextmanager
@@ -39,6 +40,31 @@ from aiogram.client.session.middlewares.base import BaseRequestMiddleware
 # =========================================================
 # QUANTUM TRADE AI — CONFIGURATION
 # =========================================================
+
+def load_local_env():
+    """Load a local .env file without replacing explicitly supplied variables."""
+    env_file = Path(__file__).resolve().with_name(".env")
+    try:
+        lines = env_file.read_text(encoding="utf-8-sig").splitlines()
+    except FileNotFoundError:
+        return
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.lower().startswith("export "):
+            line = line[7:].lstrip()
+        key, separator, value = line.partition("=")
+        key = key.strip()
+        if not separator or not key or os.getenv(key):
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ[key] = value
+
+
+load_local_env()
 
 TOKEN_USER = os.getenv("TOKEN_USER", "").strip()
 TOKEN_ADMIN = os.getenv("TOKEN_ADMIN", "").strip()
@@ -87,7 +113,7 @@ PAIR_RE = re.compile(
     re.I,
 )
 
-DB_PATH = os.getenv("DB_PATH", "quantum.db")
+DB_PATH = os.getenv("DB_PATH", str(Path(__file__).resolve().with_name("quantum.db")))
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif")
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
@@ -1622,34 +1648,69 @@ async def calendar_handler(message: Message):
 
 def signal_result_kind(details):
     result_text = (details or "").upper()
-    # Explicit loss/wait indicators take precedence over decorative checkmarks
-    # that may be part of a forwarded signal's design.
-    if re.search(r"\b(LOSS|LOSE|ПРОИГРЫШ|УБЫТОК)\b|❌|⭕|✖️|➖|🔴", result_text):
+    # A check is the published result even when the source also leaves its
+    # entry timer (⌛) in the post. A missed entry is a loss, never a wait.
+    if re.search(
+        r"\b(LOSS|LOSE|ПРОИГРЫШ|УБЫТОК|НЕ ЗАШ[ЕЁ]Л|НЕ ВОШ[ЕЁ]Л|NO ENTRY|NOT ENTERED)\b"
+        r"|❌|⭕|✖️|➖|🔴",
+        result_text,
+    ):
         return "loss"
-    if re.search(r"\b(WAIT|WAITING|ОЖИДАНИЕ|ЖДЁМ|ЖДЕМ)\b|⏳|⌛", result_text):
-        return "wait"
     if re.search(r"\b(WIN|WON|ВЫИГРЫШ|ПРИБЫЛЬ)\b|✅|☑|✔|🗸|✓", result_text):
         return "win"
-    return "wait"
+    return "loss"
 
 
 def signal_result_marker(details):
-    """Use one animated check for WIN and WAIT, and an animated cross for LOSS."""
-    return "❌" if signal_result_kind(details) == "loss" else "✅"
+    """Use a check for a confirmed entry and a cross for every non-entry result."""
+    return "✅" if signal_result_kind(details) == "win" else "❌"
 
 
 def history_signal_marker(details):
-    """Show the requested plain result markers in the signal history only."""
-    return {
-        "win": "✅",
-        "loss": "➖",
-        "wait": "⌛",
-    }[signal_result_kind(details)]
+    """Show only a normal check or cross in the user's saved signal history."""
+    return signal_result_marker(details)
 
 
 def is_signal_record(instrument, details):
     """Count only records that identify at least one supported market pair."""
     return bool(extract_pairs(f"{instrument or ''} {details or ''}"))
+
+
+def ensure_source_signal_record(conn, message_id, text, created_at):
+    """Idempotently persist a recognized source post in the signal table."""
+    if not is_signal_record("", text):
+        return 0
+    return conn.execute("""
+        INSERT INTO signals
+            (instrument, direction, timeframe, details, created_at, created_by, source_message_id)
+        SELECT ?, ?, ?, ?, ?, ?, ?
+        WHERE NOT EXISTS (
+            SELECT 1 FROM signals WHERE source_message_id=? AND created_by=0
+        )
+    """, (
+        "Публикация", "Источник", "-", (text or "")[:3000], created_at, 0,
+        message_id, message_id,
+    )).rowcount
+
+
+def backfill_source_signal_records():
+    """Restore missing signal-table rows from the retained source-post history."""
+    created = 0
+    with connect_db() as conn:
+        rows = conn.execute("""
+            SELECT p.message_id, p.text, p.created_at
+            FROM source_posts AS p
+            WHERE NOT EXISTS (
+                SELECT 1 FROM signals AS s
+                WHERE s.source_message_id=p.message_id AND s.created_by=0
+            )
+        """).fetchall()
+        for message_id, text, created_at in rows:
+            created += ensure_source_signal_record(
+                conn, message_id, text, created_at or now()
+            )
+    if created:
+        log.info("Restored %s missing source-signal database rows", created)
 
 
 def compact_signal_text(details):
@@ -2071,14 +2132,16 @@ async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_r
     original = message.text or message.caption or ""
     status_emojis = re.compile(r"✅|☑️?|✔️?|🗸|✓|⏳|⌛|⭕|❌|✖️?|➖|🔴")
     has_result_marker = bool(status_emojis.search(original))
-    if not has_result_marker and not allow_regular_fallback:
+    is_pair_signal = bool(extract_pairs(original))
+    should_mark_result = has_result_marker or is_pair_signal
+    if not should_mark_result and not allow_regular_fallback:
         return
     normalized = status_emojis.sub("", original)
     normalized = re.sub(r"[ \t]{2,}", " ", normalized)
     normalized = re.sub(r" *\n *", "\n", normalized).strip()
     decorated = (
-        f"{normalized} {history_signal_marker(original)}".strip()
-        if has_result_marker else original
+        f"{normalized} {signal_result_marker(original)}".strip()
+        if should_mark_result else original
     )
     common = {
         "chat_id": user_id,
@@ -2119,21 +2182,10 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT DO NOTHING
             """, (message.message_id, post_text, posted_at, posted_at)).rowcount
-            if inserted:
-                conn.execute("""
-                    INSERT INTO signals
-                    (instrument, direction, timeframe, details, created_at, created_by, source_message_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    "Публикация",
-                    "Источник",
-                    "-",
-                    post_text[:3000],
-                    posted_at,
-                    0,
-                    message.message_id,
-                ))
-            else:
+            ensure_source_signal_record(
+                conn, message.message_id, post_text, posted_at
+            )
+            if not inserted:
                 log.info("Resuming undelivered recipients for source post %s.", message.message_id)
     except sqlite3.Error:
         log.exception("Could not save source-channel entry.")
@@ -2208,10 +2260,16 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
 @user_dp.edited_channel_post(F.chat.id == SOURCE_CHANNEL_ID)
 async def signals_pro_edited_handler(message: Message, bot: Bot):
     source_text = message.text or message.caption or ""
+    edited_at = now()
     with connect_db() as conn:
         conn.execute(
-            "UPDATE source_posts SET text=?, updated_at=? WHERE message_id=?",
-            (source_text, now(), message.message_id),
+            "INSERT INTO source_posts (message_id, text, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(message_id) DO UPDATE SET "
+            "text=excluded.text, updated_at=excluded.updated_at",
+            (message.message_id, source_text, edited_at, edited_at),
+        )
+        ensure_source_signal_record(
+            conn, message.message_id, source_text, edited_at
         )
         conn.execute(
             "UPDATE signals SET details=? WHERE source_message_id=?",
@@ -2980,6 +3038,7 @@ async def admin_buttons(callback: CallbackQuery):
 async def main():
     global USER_BOT, ADMIN_BOT
     init_db()
+    backfill_source_signal_records()
 
     if not TOKEN_USER:
         raise RuntimeError("Не задан GitHub Secret TOKEN_USER")
