@@ -584,7 +584,7 @@ main_keyboard = ReplyKeyboardMarkup(
         [KeyboardButton(text="🤖 АВТОМАТИЧЕСКИЙ БОТ", style="primary")],
         [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="success")],
         [
-            KeyboardButton(text="📃 МОЙ ПРОФИЛЬ", style="success"),
+            KeyboardButton(text="👤 МОЙ ПРОФИЛЬ", style="success"),
         ],
     ],
     resize_keyboard=True,
