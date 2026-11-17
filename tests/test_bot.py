@@ -240,10 +240,13 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
             button = markup.keyboard[0][0]
             self.assertEqual(button.icon_custom_emoji_id, "calendar-id")
             self.assertEqual(button.text, "Экономический календарь")
-            rendered = bot.render_custom_emojis("🤖 ✅ 🗓")
+            rendered = bot.render_custom_emojis("🤖 ✅ 🗓 🧾")
             self.assertIn('emoji-id="robot-id"', rendered)
             self.assertIn('emoji-id="check-id"', rendered)
-            self.assertIn("🗓", rendered)
+            self.assertIn('emoji-id="calendar-id"', rendered)
+            self.assertIn('emoji-id="animated-id"', rendered)
+            status_id = bot.next_custom_emoji_id("⭕")
+            self.assertEqual(bot.next_custom_emoji_id("⭕"), status_id)
         finally:
             bot._CUSTOM_EMOJI_PACK = old_pack
             bot._CUSTOM_EMOJI_FALLBACK_IDS = old_ids

@@ -104,8 +104,8 @@ _CUSTOM_EMOJI_INDEX = {}
 _CUSTOM_EMOJI_FALLBACK_IDS = []
 ANIMATED_EMOJI_TARGETS = (
     "🗓", "🔤", "⭕", "⏳", "🤖", "➡️", "🇷🇺", "🇦🇮", "🇬🇧", "📃", "🚬",
-    "❗️", "🟢", "📴", "👤", "✏️", "🗞", "🛜", "📈", "📊", "🕘", "🔔",
-    "✅", "❌", "📅", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫",
+    "❗️", "🟢", "📴", "👤", "✏️", "🗞", "🛜", "📈", "📊", "🔔",
+    "✅", "❌", "📅", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫", "🧾", "📄", "📩",
 )
 
 logging.basicConfig(
@@ -845,13 +845,14 @@ async def setup_custom_emojis(bot):
 
 
 def next_custom_emoji_id(emoji):
-    """Cycle only through stickers whose alt emoji exactly matches the target."""
+    """Choose a stable sticker ID so the same status always looks the same."""
     sticker_ids = (_CUSTOM_EMOJI_PACK or {}).get(emoji, ())
-    if not sticker_ids:
+    if sticker_ids:
+        return sticker_ids[0]
+    if emoji not in ANIMATED_EMOJI_TARGETS or not _CUSTOM_EMOJI_FALLBACK_IDS:
         return None
-    index = _CUSTOM_EMOJI_INDEX.get(emoji, 0)
-    _CUSTOM_EMOJI_INDEX[emoji] = index + 1
-    return sticker_ids[index % len(sticker_ids)]
+    stable_index = sum((index + 1) * ord(char) for index, char in enumerate(emoji))
+    return _CUSTOM_EMOJI_FALLBACK_IDS[stable_index % len(_CUSTOM_EMOJI_FALLBACK_IDS)]
 
 
 def render_custom_emojis(text):
@@ -869,6 +870,11 @@ def render_custom_emojis(text):
         emoji: ids for emoji, ids in _CUSTOM_EMOJI_PACK.items()
         if emoji and ids
     }
+    emoji_map.update({
+        emoji: _CUSTOM_EMOJI_FALLBACK_IDS
+        for emoji in ANIMATED_EMOJI_TARGETS
+        if emoji not in emoji_map and _CUSTOM_EMOJI_FALLBACK_IDS
+    })
     if emoji_map:
         pattern = re.compile("|".join(re.escape(item) for item in sorted(emoji_map, key=len, reverse=True)))
         text = pattern.sub(
@@ -1154,13 +1160,23 @@ def apply_custom_button_icons(reply_markup, language="ru"):
             if language == "en":
                 label = translate_to_english(label)
             for emoji in sorted((_CUSTOM_EMOJI_PACK or {}), key=len, reverse=True):
-                if emoji and emoji in label and (_CUSTOM_EMOJI_PACK or {}).get(emoji):
+                if emoji and emoji in label and next_custom_emoji_id(emoji):
                     try:
                         button.icon_custom_emoji_id = next_custom_emoji_id(emoji)
                         button.text = label.replace(emoji, "", 1).lstrip()
                     except (AttributeError, TypeError, ValueError):
                         pass
                     break
+            else:
+                for emoji in sorted(ANIMATED_EMOJI_TARGETS, key=len, reverse=True):
+                    custom_id = next_custom_emoji_id(emoji)
+                    if emoji in label and custom_id:
+                        try:
+                            button.icon_custom_emoji_id = custom_id
+                            button.text = label.replace(emoji, "", 1).lstrip()
+                        except (AttributeError, TypeError, ValueError):
+                            pass
+                        break
 
 
 class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
