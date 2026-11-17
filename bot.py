@@ -855,7 +855,7 @@ def next_custom_emoji_id(emoji):
 
 
 def render_custom_emojis(text):
-    """Replace only exact pack matches; keep result markers as standard emoji."""
+    """Replace exact pack matches with their animated Telegram custom emoji."""
     if not text or not _CUSTOM_EMOJI_PACK:
         return text
     protected = []
@@ -865,10 +865,9 @@ def render_custom_emojis(text):
         return f"\x00CUSTOM_EMOJI_{len(protected) - 1}\x00"
 
     text = re.sub(r"<tg-emoji\b[^>]*>.*?</tg-emoji>", protect, text, flags=re.S)
-    stable_markers = {"✅", "⭕", "⏳", "❌", "✓", "✔", "☑️"}
     emoji_map = {
         emoji: ids for emoji, ids in _CUSTOM_EMOJI_PACK.items()
-        if emoji and ids and emoji not in stable_markers
+        if emoji and ids
     }
     if emoji_map:
         pattern = re.compile("|".join(re.escape(item) for item in sorted(emoji_map, key=len, reverse=True)))
@@ -1143,8 +1142,25 @@ def chat_language(chat_id):
 
 
 def apply_custom_button_icons(reply_markup, language="ru"):
-    """Leave button labels and icons as ordinary Unicode text and emoji."""
-    return
+    """Use animated icons only for buttons with an exact match in the selected packs."""
+    if not reply_markup:
+        return
+    keyboard = getattr(reply_markup, "inline_keyboard", None) or getattr(reply_markup, "keyboard", None)
+    if not keyboard:
+        return
+    for row in keyboard:
+        for button in row:
+            label = getattr(button, "text", "") or ""
+            if language == "en":
+                label = translate_to_english(label)
+            for emoji in sorted((_CUSTOM_EMOJI_PACK or {}), key=len, reverse=True):
+                if emoji and emoji in label and (_CUSTOM_EMOJI_PACK or {}).get(emoji):
+                    try:
+                        button.icon_custom_emoji_id = next_custom_emoji_id(emoji)
+                        button.text = label.replace(emoji, "", 1).lstrip()
+                    except (AttributeError, TypeError, ValueError):
+                        pass
+                    break
 
 
 class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
