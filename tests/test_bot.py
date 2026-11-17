@@ -216,7 +216,7 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
             "GBP/JPY · m5 · вверх",
         )
 
-    async def test_button_icons_use_animated_pack_when_exact_fallback_is_missing(self):
+    async def test_custom_emoji_are_left_as_standard_unicode(self):
         old_pack = bot._CUSTOM_EMOJI_PACK
         old_ids = bot._CUSTOM_EMOJI_FALLBACK_IDS
         try:
@@ -228,11 +228,18 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
             )
             bot.apply_custom_button_icons(markup)
             button = markup.keyboard[0][0]
-            self.assertEqual(button.icon_custom_emoji_id, "animated-id")
-            self.assertEqual(button.text, "Экономический календарь")
+            self.assertIsNone(button.icon_custom_emoji_id)
+            self.assertEqual(button.text, "🗓 Экономический календарь")
+            self.assertEqual(bot.render_custom_emojis("✅ ⭕ ⏳"), "✅ ⭕ ⏳")
         finally:
             bot._CUSTOM_EMOJI_PACK = old_pack
             bot._CUSTOM_EMOJI_FALLBACK_IDS = old_ids
+
+    async def test_main_keyboard_has_single_signal_history_entry(self):
+        labels = [button.text for row in bot.main_keyboard.keyboard for button in row]
+        self.assertIn("🕘 ИСТОРИЯ СИГНАЛОВ", labels)
+        self.assertFalse(any("МОИ СИГНАЛЫ" in label for label in labels))
+        self.assertFalse(hasattr(bot, "my_signals_handler"))
 
 
 if __name__ == "__main__":

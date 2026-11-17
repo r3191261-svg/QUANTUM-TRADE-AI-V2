@@ -573,9 +573,6 @@ main_keyboard = ReplyKeyboardMarkup(
             KeyboardButton(text="🕘 ИСТОРИЯ СИГНАЛОВ", style="danger"),
         ],
         [KeyboardButton(text="🤖 АВТОМАТИЧЕСКИЙ БОТ", style="primary")],
-        [
-            KeyboardButton(text="📈 МОИ СИГНАЛЫ", style="success"),
-        ],
         [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="success")],
         [
             KeyboardButton(text="📃 МОЙ ПРОФИЛЬ", style="success"),
@@ -774,15 +771,8 @@ async def start_handler(message: Message):
 
 
 async def custom_emoji_markup(bot, fallback_emoji):
-    """Return an animated custom-emoji entity from the configured public pack."""
-    global _CUSTOM_EMOJI_PACK
-    if _CUSTOM_EMOJI_PACK is None:
-        await setup_custom_emojis(bot)
-
-    custom_id = next_custom_emoji_id(fallback_emoji)
-    if not custom_id:
-        return fallback_emoji
-    return f'<tg-emoji emoji-id="{custom_id}">{html.escape(fallback_emoji)}</tg-emoji>'
+    """Return a standard Unicode emoji for consistent rendering in Telegram."""
+    return fallback_emoji
 
 
 def is_single_emoji_fallback(value):
@@ -876,56 +866,7 @@ def next_custom_emoji_id(emoji):
 
 
 def render_custom_emojis(text):
-    """Replace pack emoji in HTML messages with Telegram custom emoji entities."""
-    if not text:
-        return text
-    protected = []
-    visible_fallbacks = []
-
-    # Keep these two result states readable even when a selected pack has no
-    # animated equivalent for them. When it does, they are replaced normally.
-    for marker in ("⭕", "⏳"):
-        if marker not in (_CUSTOM_EMOJI_PACK or {}) and not _CUSTOM_EMOJI_FALLBACK_IDS:
-            placeholder = f"\x00RESULT_MARKER_{len(visible_fallbacks)}\x00"
-            visible_fallbacks.append((placeholder, marker))
-            text = text.replace(marker, placeholder)
-
-    def protect(match):
-        protected.append(match.group(0))
-        return f"\x00CUSTOM_EMOJI_{len(protected) - 1}\x00"
-
-    text = re.sub(r"<tg-emoji\b[^>]*>.*?</tg-emoji>", protect, text, flags=re.S)
-    if not _CUSTOM_EMOJI_PACK:
-        text = remove_emoji_characters(text)
-        for index, block in enumerate(protected):
-            text = text.replace(f"\x00CUSTOM_EMOJI_{index}\x00", block)
-        for placeholder, marker in visible_fallbacks:
-            text = text.replace(placeholder, marker)
-        return text
-    emoji_map = {
-        emoji: custom_ids
-        for emoji, custom_ids in _CUSTOM_EMOJI_PACK.items()
-        if emoji and custom_ids
-    }
-    for emoji in ANIMATED_EMOJI_TARGETS:
-        if emoji not in emoji_map and _CUSTOM_EMOJI_FALLBACK_IDS:
-            emoji_map[emoji] = _CUSTOM_EMOJI_FALLBACK_IDS
-    if not emoji_map:
-        text = remove_emoji_characters(text)
-        for placeholder, marker in visible_fallbacks:
-            text = text.replace(placeholder, marker)
-        return text
-    emoji_pattern = re.compile("|".join(re.escape(item) for item in sorted(emoji_map, key=len, reverse=True)))
-    text = emoji_pattern.sub(
-        lambda match: custom_emoji_entity(match.group(0), next_custom_emoji_id(match.group(0))),
-        text,
-    )
-    text = re.sub(r"<tg-emoji\b[^>]*>.*?</tg-emoji>", protect, text, flags=re.S)
-    text = remove_emoji_characters(text)
-    for index, block in enumerate(protected):
-        text = text.replace(f"\x00CUSTOM_EMOJI_{index}\x00", block)
-    for placeholder, marker in visible_fallbacks:
-        text = text.replace(placeholder, marker)
+    """Keep standard emoji untouched; animated packs can render inconsistently."""
     return text
 
 
@@ -1191,40 +1132,8 @@ def chat_language(chat_id):
 
 
 def apply_custom_button_icons(reply_markup, language="ru"):
-    """Use the selected custom emoji as Telegram button icons when available."""
-    if not reply_markup:
-        return
-    keyboard = getattr(reply_markup, "inline_keyboard", None) or getattr(reply_markup, "keyboard", None)
-    if not keyboard:
-        return
-    for row in keyboard:
-        for button in row:
-            if getattr(button, "icon_custom_emoji_id", None):
-                continue
-            label = getattr(button, "text", "") or ""
-            if language == "en":
-                label = translate_to_english(label)
-            for emoji in sorted((_CUSTOM_EMOJI_PACK or {}), key=len, reverse=True):
-                if emoji and emoji in label:
-                    try:
-                        # Use one animated icon per button and keep the button label text clean.
-                        button.icon_custom_emoji_id = next_custom_emoji_id(emoji)
-                        button.text = remove_emoji_characters(label).strip()
-                    except Exception:
-                        pass
-                    break
-            else:
-                try:
-                    fallback_emoji = next(
-                        (candidate for candidate in ANIMATED_EMOJI_TARGETS if candidate in label),
-                        None,
-                    )
-                    fallback_id = next_custom_emoji_id(fallback_emoji) if fallback_emoji else None
-                    if fallback_id:
-                        button.icon_custom_emoji_id = fallback_id
-                    button.text = remove_emoji_characters(label).strip()
-                except Exception:
-                    pass
+    """Leave button labels and icons as ordinary Unicode text and emoji."""
+    return
 
 
 class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
@@ -1906,41 +1815,6 @@ async def profile_handler(message: Message):
 # =========================================================
 # SETTINGS
 # =========================================================
-
-@user_dp.message(F.text.in_({"📈 МОИ СИГНАЛЫ", "МОИ СИГНАЛЫ", "📈 Мои сигналы", "Мои сигналы", "MY SIGNALS"}))
-async def my_signals_handler(message: Message):
-    if not await check_user(message):
-        return
-    with connect_db() as conn:
-        source_rows = conn.execute(
-            "SELECT text, created_at FROM source_posts ORDER BY created_at DESC LIMIT 100"
-        ).fetchall()
-        manual_rows = conn.execute(
-            "SELECT instrument, direction, timeframe, details, created_at "
-            "FROM signals WHERE (created_by != 0 OR created_by IS NULL) "
-            "ORDER BY created_at DESC LIMIT 100"
-        ).fetchall()
-    matching = []
-    for text, created_at in source_rows:
-        matching.append((compact_signal_text(text), text, created_at))
-    for instrument, direction, timeframe, details, created_at in manual_rows:
-        matching.append((
-            f"{instrument} · {direction} · {timeframe}",
-            details or "",
-            created_at,
-        ))
-    matching.sort(key=lambda item: item[2] or "", reverse=True)
-    text = (
-        "<b>📈 МОИ СИГНАЛЫ</b>\n━━━━━━━━━━━━━━━━━━\n"
-        "Последние опубликованные сигналы\n"
-    )
-    if not matching:
-        text += "\nСигналов с выбранными парами и интервалом пока нет."
-    else:
-        for summary, details, created_at in matching[:10]:
-            text += f"\n{signal_result_marker(details)} <b>{created_at or 'время не указано'}</b>\n<b>{html.escape(summary)}</b>\n──────────────\n"
-    await message.answer(text[:4000])
-
 
 @user_dp.message(Command("notifications"))
 @user_dp.message(F.text.in_({"🔔 УВЕДОМЛЕНИЯ", "УВЕДОМЛЕНИЯ", "🔔 Уведомления", "Уведомления", "NOTIFICATIONS"}))
