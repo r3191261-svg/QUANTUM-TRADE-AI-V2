@@ -92,7 +92,7 @@ INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif"
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
 INTRO_VIDEO_PATH = os.getenv("INTRO_VIDEO_PATH", "assets/quantum_trade_ai_promo.mp4")
 DEFAULT_CUSTOM_EMOJI_PACKS = (
-    "svoy_v_alfe,AR_PREMIUM,TrendsEmoji,zholto_rozovij,NewsEmoji"
+    "svoy_v_alfe,AR_PREMIUM,TrendsEmoji,zholto_rozovij,NewsEmoji,FlagsByKoylli,tgiosicons"
 )
 CUSTOM_EMOJI_PACK_NAMES = tuple(
     name.strip()
@@ -100,13 +100,21 @@ CUSTOM_EMOJI_PACK_NAMES = tuple(
     if name.strip()
 )
 _CUSTOM_EMOJI_PACK = None
-_CUSTOM_EMOJI_INDEX = {}
-_CUSTOM_EMOJI_FALLBACK_IDS = []
 ANIMATED_EMOJI_TARGETS = (
-    "🗓", "🔤", "⭕", "⏳", "🤖", "➡️", "🇷🇺", "🇦🇮", "🇬🇧", "📃", "🚬",
-    "❗️", "🟢", "📴", "👤", "✏️", "🗞", "🛜", "📈", "📊", "🔔",
-    "✅", "❌", "📅", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫", "🧾", "📄", "📩",
+    "🗓", "📅", "🕘", "🕒", "⏳", "🤖", "➡️", "🇷🇺", "🇬🇧", "✏️", "🗞", "🛜", "📈", "📊",
+    "🔔", "✅", "❌", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫",
 )
+BUTTON_EMOJI_TARGETS = tuple(dict.fromkeys((*ANIMATED_EMOJI_TARGETS, "👤")))
+ANIMATED_EMOJI_ALIASES = {
+    "🤖": ("👾",),
+    "🕒": ("🕘", "🕐", "⏰", "⌚"),
+    "🕘": ("🕒", "🕐", "⏰", "⌚"),
+    "✅": ("☑️", "✔️", "✔", "✓", "🗸"),
+    "❌": ("✖️", "✖", "❎"),
+    "⏳": ("⌛", "🕒", "⏰"),
+    "👤": ("🧑", "🧑‍💼", "👨", "👩"),
+    "🛡": ("🛡️",),
+}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -690,7 +698,7 @@ async def check_owner(message):
 
 async def show_main_menu(message):
     await message.answer(
-        "💠 QUANTUM TRADE AI\n"
+        "🛡 QUANTUM TRADE AI\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "Добро пожаловать в интеллектуальную торговую платформу!\n\n"
         "📈 Сигналы для бинарных опционов\n"
@@ -720,7 +728,7 @@ async def start_handler(message: Message):
 
     welcome_emoji = await custom_emoji_markup(message.bot, "🤖")
     welcome_text = (
-        "⚡ <b>QUANTUM TRADE AI</b>\n\n"
+        "🛡 <b>QUANTUM TRADE AI</b>\n\n"
         f"{welcome_emoji} <b>Добро пожаловать в мир интеллектуальной торговли!</b>\n\n"
         "Мы анализируем рынок за вас, используя современные алгоритмы "
         "искусственного интеллекта, чтобы помочь вам принимать более "
@@ -763,6 +771,12 @@ async def custom_emoji_markup(bot, fallback_emoji):
     if _CUSTOM_EMOJI_PACK is None:
         await setup_custom_emojis(bot)
     custom_id = next_custom_emoji_id(fallback_emoji)
+    if not custom_id:
+        custom_id = next((
+            custom_id
+            for alias in ANIMATED_EMOJI_ALIASES.get(fallback_emoji, ())
+            for custom_id in (_CUSTOM_EMOJI_PACK or {}).get(alias, ())
+        ), None)
     return custom_emoji_entity(fallback_emoji, custom_id) if custom_id else fallback_emoji
 
 
@@ -811,7 +825,7 @@ def remove_emoji_characters(text):
 
 async def setup_custom_emojis(bot):
     """Load the configured emoji pack and install outgoing message decoration."""
-    global _CUSTOM_EMOJI_PACK, _CUSTOM_EMOJI_FALLBACK_IDS
+    global _CUSTOM_EMOJI_PACK
     middleware_manager = getattr(getattr(bot, "session", None), "middleware", None)
     if middleware_manager is not None and not any(
         isinstance(item, CustomEmojiRequestMiddleware) for item in middleware_manager
@@ -836,7 +850,6 @@ async def setup_custom_emojis(bot):
                 )
                 if custom_id and is_animated and is_single_emoji_fallback(emoji):
                     _CUSTOM_EMOJI_PACK.setdefault(emoji, []).append(custom_id)
-                    _CUSTOM_EMOJI_FALLBACK_IDS.append(custom_id)
                     pack_count += 1
             log.info("Loaded %d custom emojis from %s", pack_count, pack_name)
         except Exception:
@@ -845,14 +858,15 @@ async def setup_custom_emojis(bot):
 
 
 def next_custom_emoji_id(emoji):
-    """Choose a stable sticker ID so the same status always looks the same."""
+    """Return an exact sticker match; never substitute an unrelated sticker."""
     sticker_ids = (_CUSTOM_EMOJI_PACK or {}).get(emoji, ())
-    if sticker_ids:
-        return sticker_ids[0]
-    if emoji not in ANIMATED_EMOJI_TARGETS or not _CUSTOM_EMOJI_FALLBACK_IDS:
-        return None
-    stable_index = sum((index + 1) * ord(char) for index, char in enumerate(emoji))
-    return _CUSTOM_EMOJI_FALLBACK_IDS[stable_index % len(_CUSTOM_EMOJI_FALLBACK_IDS)]
+    if not sticker_ids:
+        sticker_ids = next((
+            (_CUSTOM_EMOJI_PACK or {}).get(alias, ())
+            for alias in ANIMATED_EMOJI_ALIASES.get(emoji, ())
+            if (_CUSTOM_EMOJI_PACK or {}).get(alias)
+        ), ())
+    return sticker_ids[0] if sticker_ids else None
 
 
 def render_custom_emojis(text):
@@ -866,15 +880,12 @@ def render_custom_emojis(text):
         return f"\x00CUSTOM_EMOJI_{len(protected) - 1}\x00"
 
     text = re.sub(r"<tg-emoji\b[^>]*>.*?</tg-emoji>", protect, text, flags=re.S)
+    text = re.sub(r"(?<!🛡 )QUANTUM TRADE AI", "🛡 QUANTUM TRADE AI", text)
     emoji_map = {
-        emoji: ids for emoji, ids in _CUSTOM_EMOJI_PACK.items()
-        if emoji and ids
-    }
-    emoji_map.update({
-        emoji: _CUSTOM_EMOJI_FALLBACK_IDS
+        emoji: (next_custom_emoji_id(emoji),)
         for emoji in ANIMATED_EMOJI_TARGETS
-        if emoji not in emoji_map and _CUSTOM_EMOJI_FALLBACK_IDS
-    })
+        if next_custom_emoji_id(emoji)
+    }
     if emoji_map:
         pattern = re.compile("|".join(re.escape(item) for item in sorted(emoji_map, key=len, reverse=True)))
         text = pattern.sub(
@@ -1159,7 +1170,7 @@ def apply_custom_button_icons(reply_markup, language="ru"):
             label = getattr(button, "text", "") or ""
             if language == "en":
                 label = translate_to_english(label)
-            for emoji in sorted((_CUSTOM_EMOJI_PACK or {}), key=len, reverse=True):
+            for emoji in sorted(BUTTON_EMOJI_TARGETS, key=len, reverse=True):
                 if emoji and emoji in label and next_custom_emoji_id(emoji):
                     try:
                         button.icon_custom_emoji_id = next_custom_emoji_id(emoji)
@@ -1167,16 +1178,6 @@ def apply_custom_button_icons(reply_markup, language="ru"):
                     except (AttributeError, TypeError, ValueError):
                         pass
                     break
-            else:
-                for emoji in sorted(ANIMATED_EMOJI_TARGETS, key=len, reverse=True):
-                    custom_id = next_custom_emoji_id(emoji)
-                    if emoji in label and custom_id:
-                        try:
-                            button.icon_custom_emoji_id = custom_id
-                            button.text = label.replace(emoji, "", 1).lstrip()
-                        except (AttributeError, TypeError, ValueError):
-                            pass
-                        break
 
 
 class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
@@ -1595,7 +1596,7 @@ def signal_result_marker(details):
     # Explicit loss/wait indicators take precedence over decorative checkmarks
     # that may be part of a forwarded signal's design.
     if re.search(r"\b(LOSS|LOSE|ПРОИГРЫШ|УБЫТОК)\b|❌|⭕|✖️|➖|🔴", result_text):
-        return "⭕"
+        return "❌"
     if re.search(r"\b(WAIT|WAITING|ОЖИДАНИЕ|ЖДЁМ|ЖДЕМ)\b|⏳|⌛", result_text):
         return "⏳"
     if re.search(r"\b(WIN|WON|ВЫИГРЫШ|ПРИБЫЛЬ)\b|✅|☑|✔|🗸|✓", result_text):
@@ -1643,7 +1644,7 @@ async def statistics_handler(message: Message):
         marker = signal_result_marker(details)
         if marker == "✅":
             wins += 1
-        elif marker == "⭕":
+        elif marker == "❌":
             losses += 1
     await message.answer(
         "📊 РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 24 ЧАСА\n"
@@ -1741,7 +1742,7 @@ async def autotrade_handler(message: Message):
     ])
 
     await message.answer(
-        "<b>🤖 QUANTUM TRADE AI — АВТОМАТИЧЕСКИЙ БОТ</b>\n"
+        "<b>🛡 QUANTUM TRADE AI — 🤖 АВТОМАТИЧЕСКИЙ БОТ</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "Просто выберите действие.",
         reply_markup=keyboard,
@@ -1829,15 +1830,16 @@ async def profile_handler(message: Message):
         "suspended": "📴 НЕАКТИВЕН",
     }.get(user[3], "📴 НЕАКТИВЕН")
 
+    profile_emoji = await custom_emoji_markup(message.bot, "👤")
     await message.answer(
-        "<b>📃 ЛИЧНЫЙ КАБИНЕТ</b>\n"
+        f"<b>{profile_emoji} ЛИЧНЫЙ КАБИНЕТ</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"🔤 ID: {user[0]}\n"
+        f"🆔 ID: {user[0]}\n"
         f"👤 Имя: {user[2]}\n"
-        f"🚬 Username: {username}\n"
+        f"🔗 Username: {username}\n"
         f"❗️ Статус: {status}\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        "💠 QUANTUM TRADE AI"
+        "🛡 QUANTUM TRADE AI"
     )
 
 
@@ -1945,13 +1947,14 @@ async def profile_callback(callback: CallbackQuery):
         return
 
     username = "@" + user[1] if user[1] else "не указан"
+    profile_emoji = await custom_emoji_markup(callback.bot, "👤")
 
     await callback.message.answer(
-        "<b>📃 МОЙ ПРОФИЛЬ</b>\n"
+        f"<b>{profile_emoji} МОЙ ПРОФИЛЬ</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
-        f"🔤 ID: {user[0]}\n"
+        f"🆔 ID: {user[0]}\n"
         f"👤 Имя: {user[2]}\n"
-        f"🚬 Username: {username}\n"
+        f"🔗 Username: {username}\n"
         f"❗️ Статус: {'🟢 АКТИВЕН' if user[3] == 'active' else '📴 НЕАКТИВЕН'}\n"
         f"📅 Регистрация: {user[6]}"
     )

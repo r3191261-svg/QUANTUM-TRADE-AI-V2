@@ -209,7 +209,7 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_signal_history_normalizes_status_and_hides_source_checkmark_noise(self):
         self.assertEqual(bot.signal_result_marker("GBPJPY m5 вверх ⌛\n✅"), "⏳")
-        self.assertEqual(bot.signal_result_marker("GBPCHF m5 вверх ⭕"), "⭕")
+        self.assertEqual(bot.signal_result_marker("GBPCHF m5 вверх ⭕"), "❌")
         self.assertEqual(bot.signal_result_marker("AUDJPY m5 вверх ✔"), "✅")
         self.assertEqual(
             bot.compact_signal_text("GBPJPY m5 вверх ⌛\n✅"),
@@ -225,13 +225,11 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_animated_emoji_require_an_exact_pack_match(self):
         old_pack = bot._CUSTOM_EMOJI_PACK
-        old_ids = bot._CUSTOM_EMOJI_FALLBACK_IDS
         try:
             bot._CUSTOM_EMOJI_PACK = {
                 "🤖": ["robot-id"], "✨": ["sparkle-id"], "🗓": ["calendar-id"],
-                "✅": ["check-id"],
+                "✅": ["check-id"], "⌛": ["hourglass-id"], "✖️": ["cross-id"],
             }
-            bot._CUSTOM_EMOJI_FALLBACK_IDS = ["animated-id"]
             markup = bot.ReplyKeyboardMarkup(
                 keyboard=[[bot.KeyboardButton(text="🗓 Экономический календарь")]],
                 resize_keyboard=True,
@@ -240,16 +238,19 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
             button = markup.keyboard[0][0]
             self.assertEqual(button.icon_custom_emoji_id, "calendar-id")
             self.assertEqual(button.text, "Экономический календарь")
-            rendered = bot.render_custom_emojis("🤖 ✅ 🗓 🧾")
+            rendered = bot.render_custom_emojis("🤖 ✅ 🗓 🧾 🅰️ QUANTUM TRADE AI")
             self.assertIn('emoji-id="robot-id"', rendered)
             self.assertIn('emoji-id="check-id"', rendered)
             self.assertIn('emoji-id="calendar-id"', rendered)
-            self.assertIn('emoji-id="animated-id"', rendered)
-            status_id = bot.next_custom_emoji_id("⭕")
-            self.assertEqual(bot.next_custom_emoji_id("⭕"), status_id)
+            self.assertIn("🧾", rendered)
+            self.assertIn("🅰️", rendered)
+            self.assertIn('emoji-id="cross-id"', bot.render_custom_emojis("❌"))
+            self.assertIn('emoji-id="hourglass-id"', bot.render_custom_emojis("⏳"))
+            self.assertIn("🛡 QUANTUM TRADE AI", rendered)
+            status_id = bot.next_custom_emoji_id("❌")
+            self.assertEqual(bot.next_custom_emoji_id("❌"), status_id)
         finally:
             bot._CUSTOM_EMOJI_PACK = old_pack
-            bot._CUSTOM_EMOJI_FALLBACK_IDS = old_ids
 
     async def test_main_keyboard_has_single_signal_history_entry(self):
         labels = [button.text for row in bot.main_keyboard.keyboard for button in row]
