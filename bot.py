@@ -600,7 +600,7 @@ def signal_action_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text="➡️ Регистрация у брокера",
-            callback_data="choose_broker",
+            callback_data="choose_broker_signal",
             style="success",
         )],
         [InlineKeyboardButton(
@@ -611,10 +611,26 @@ def signal_action_keyboard():
     ])
 
 
-def broker_choice_keyboard():
+def broker_choice_keyboard(back_callback="broker_back_autotrade"):
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="INTRADE BAR", url=REGISTRATION_URL, style="success")],
         [InlineKeyboardButton(text="BinoDex", url=BINODEX_REGISTRATION_URL, style="success")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback, style="primary")],
+    ])
+
+
+def autotrade_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(
+            text="➡️ Регистрация у брокера",
+            callback_data="choose_broker",
+            style="success",
+        )],
+        [InlineKeyboardButton(
+            text="➡️ Подключить автоторговлю",
+            style="success",
+            url=SUPPORT_URL,
+        )],
     ])
 
 
@@ -1741,34 +1757,52 @@ async def autotrade_handler(message: Message):
     if not await check_user(message):
         return
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(
-            text="➡️ Регистрация у брокера",
-            callback_data="choose_broker",
-            style="success",
-        )],
-        [InlineKeyboardButton(
-            text="➡️ Подключить автоторговлю",
-            style="success",
-            url=SUPPORT_URL,
-        )],
-    ])
-
     await message.answer(
         "<b>🛡 QUANTUM TRADE AI — 🤖 АВТОМАТИЧЕСКИЙ БОТ</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "Просто выберите действие.",
-        reply_markup=keyboard,
+        reply_markup=autotrade_keyboard(),
     )
 
 
-@user_dp.callback_query(F.data == "choose_broker")
-async def broker_choice_handler(callback: CallbackQuery):
+async def _show_broker_choices(callback: CallbackQuery, back_callback: str):
     user = get_user(callback.from_user.id)
     if not user or user[3] != "active":
         await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
         return
-    await callback.message.edit_reply_markup(reply_markup=broker_choice_keyboard())
+    await callback.message.edit_reply_markup(
+        reply_markup=broker_choice_keyboard(back_callback)
+    )
+    await callback.answer()
+
+
+@user_dp.callback_query(F.data.in_({"choose_broker", "choose_broker_autotrade"}))
+async def broker_choice_handler(callback: CallbackQuery):
+    await _show_broker_choices(callback, "broker_back_autotrade")
+
+
+@user_dp.callback_query(F.data == "choose_broker_signal")
+async def broker_choice_from_signal_handler(callback: CallbackQuery):
+    await _show_broker_choices(callback, "broker_back_signal")
+
+
+@user_dp.callback_query(F.data == "broker_back_autotrade")
+async def broker_back_autotrade_handler(callback: CallbackQuery):
+    user = get_user(callback.from_user.id)
+    if not user or user[3] != "active":
+        await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
+        return
+    await callback.message.edit_reply_markup(reply_markup=autotrade_keyboard())
+    await callback.answer()
+
+
+@user_dp.callback_query(F.data == "broker_back_signal")
+async def broker_back_signal_handler(callback: CallbackQuery):
+    user = get_user(callback.from_user.id)
+    if not user or user[3] != "active":
+        await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
+        return
+    await callback.message.edit_reply_markup(reply_markup=signal_action_keyboard())
     await callback.answer()
 
 

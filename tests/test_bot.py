@@ -202,12 +202,35 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         callback = FakeCallback("choose_broker", user_id=101)
         await bot.broker_choice_handler(callback)
         choices = callback.message.reply_markup.inline_keyboard
-        self.assertEqual(len(choices), 2)
-        intrade, binodex = (row[0] for row in choices)
+        self.assertEqual(len(choices), 3)
+        intrade, binodex, back = (row[0] for row in choices)
         self.assertEqual((intrade.text, intrade.url, intrade.style),
                          ("INTRADE BAR", "https://clck.ru/3X2xAM", "success"))
         self.assertEqual((binodex.text, binodex.url, binodex.style),
                          ("BinoDex", "https://bdclick.app/smart/DLreJY", "success"))
+        self.assertEqual((back.text, back.callback_data, back.style),
+                         ("⬅️ Назад", "broker_back_autotrade", "primary"))
+
+    async def test_broker_picker_back_restores_autotrade_actions(self):
+        callback = FakeCallback("broker_back_autotrade", user_id=101)
+        await bot.broker_back_autotrade_handler(callback)
+        actions = callback.message.reply_markup.inline_keyboard
+        self.assertEqual(len(actions), 2)
+        self.assertEqual(actions[0][0].callback_data, "choose_broker")
+        self.assertEqual(actions[1][0].url, bot.SUPPORT_URL)
+
+    async def test_broker_picker_from_signal_returns_to_signal_actions(self):
+        callback = FakeCallback("choose_broker_signal", user_id=101)
+        await bot.broker_choice_from_signal_handler(callback)
+        back = callback.message.reply_markup.inline_keyboard[2][0]
+        self.assertEqual(back.callback_data, "broker_back_signal")
+
+        callback = FakeCallback("broker_back_signal", user_id=101)
+        await bot.broker_back_signal_handler(callback)
+        self.assertEqual(
+            callback.message.reply_markup.inline_keyboard[0][0].callback_data,
+            "choose_broker_signal",
+        )
 
     async def test_binary_menu_hides_crypto_list_and_exposes_binary_signals(self):
         labels = [row[0].text for row in bot.binary_menu_keyboard().inline_keyboard]
