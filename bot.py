@@ -1934,14 +1934,12 @@ async def profile_callback(callback: CallbackQuery):
 # =========================================================
 
 async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_regular_fallback=False):
-    """Add one animated emoji from the configured pack to an already-copied post."""
+    """Normalize result stickers in a copied post to one standard Unicode emoji."""
     if message.text:
-        content = getattr(message, "html_text", None) or html.escape(message.text)
         limit = 4096
         edit = bot.edit_message_text
         field = "text"
     elif message.caption is not None:
-        content = getattr(message, "html_caption", None) or html.escape(message.caption)
         limit = 1024
         edit = bot.edit_message_caption
         field = "caption"
@@ -1951,10 +1949,15 @@ async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_r
     if len(message.text or message.caption or "") > limit - 3:
         return
 
-    icon = await custom_emoji_markup(bot, "📈")
-    if icon == "📈" and not allow_regular_fallback:
+    original = message.text or message.caption or ""
+    status_emojis = re.compile(r"✅|☑️?|✔️?|🗸|✓|⏳|⌛|⭕|❌|✖️?|➖|🔴")
+    if not status_emojis.search(original):
         return
-    decorated = f"{icon} {content}"
+    marker = signal_result_marker(original)
+    normalized = status_emojis.sub("", original)
+    normalized = re.sub(r"[ \t]{2,}", " ", normalized)
+    normalized = re.sub(r" *\n *", "\n", normalized).strip()
+    decorated = html.escape(f"{normalized} {marker}".strip())
     common = {
         "chat_id": user_id,
         "message_id": copied_message_id,
@@ -1967,19 +1970,10 @@ async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_r
         else:
             await edit(**common, caption=decorated)
     except TelegramBadRequest as error:
-        if "<tg-emoji " not in decorated:
-            log.warning("Could not add animated emoji to forwarded signal: %s", error)
-            return
-        fallback = re.sub(r'<tg-emoji emoji-id="[^"]+">(.*?)</tg-emoji>', r"\1", decorated)
-        try:
-            if field == "text":
-                await edit(**common, text=fallback)
-            else:
-                await edit(**common, caption=fallback)
-        except TelegramAPIError:
-            log.exception("Could not add animated or fallback emoji to forwarded signal")
+        if "message is not modified" not in str(error).lower():
+            log.warning("Could not normalize emojis in forwarded signal: %s", error)
     except TelegramAPIError:
-        log.exception("Could not decorate forwarded signal %s", copied_message_id)
+        log.exception("Could not normalize emojis in forwarded signal %s", copied_message_id)
 
 @user_dp.channel_post(F.chat.id == SOURCE_CHANNEL_ID)
 async def signals_pro_channel_handler(message: Message, bot: Bot):
