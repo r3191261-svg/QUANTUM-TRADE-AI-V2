@@ -95,6 +95,7 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         await bot.signals_pro_edited_handler(edited, telegram)
         self.assertEqual(len(telegram.edits), 1)
         self.assertEqual(telegram.edits[0]["message_id"], 901)
+        self.assertEqual(telegram.edits[0]["text"], "EUR/USD BUY M5 ✅")
         with bot.connect_db() as conn:
             self.assertTrue(conn.execute(
                 "SELECT text FROM source_posts WHERE message_id=44"

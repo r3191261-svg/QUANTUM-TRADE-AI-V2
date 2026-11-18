@@ -2132,16 +2132,16 @@ async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_r
     original = message.text or message.caption or ""
     status_emojis = re.compile(r"✅|☑️?|✔️?|🗸|✓|⏳|⌛|⭕|❌|✖️?|➖|🔴")
     has_result_marker = bool(status_emojis.search(original))
-    is_pair_signal = bool(extract_pairs(original))
-    should_mark_result = has_result_marker or is_pair_signal
-    if not should_mark_result and not allow_regular_fallback:
+    # Forward a fresh pair exactly as published until its source post records
+    # an outcome. Never invent a loss marker merely because the result is pending.
+    if not has_result_marker and not allow_regular_fallback:
         return
     normalized = status_emojis.sub("", original)
     normalized = re.sub(r"[ \t]{2,}", " ", normalized)
     normalized = re.sub(r" *\n *", "\n", normalized).strip()
     decorated = (
         f"{normalized} {signal_result_marker(original)}".strip()
-        if should_mark_result else original
+        if has_result_marker else original
     )
     common = {
         "chat_id": user_id,
