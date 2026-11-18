@@ -471,6 +471,27 @@ def get_user(user_id):
         ).fetchone()
 
 
+async def get_user_async(user_id):
+    """Read user state without blocking other bot updates on database I/O."""
+    return await asyncio.to_thread(get_user, user_id)
+
+
+def set_notification_preferences(user_id, enabled):
+    with connect_db() as conn:
+        conn.execute(
+            "UPDATE users SET notifications=?, signals_consent=? WHERE user_id=?",
+            (int(enabled), int(enabled), user_id),
+        )
+
+
+def set_user_language(user_id, language):
+    with connect_db() as conn:
+        conn.execute(
+            "UPDATE users SET language=? WHERE user_id=?",
+            (language, user_id),
+        )
+
+
 def get_status(user_id):
     user = get_user(user_id)
     return user[3] if user else "active"
@@ -1239,13 +1260,19 @@ class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
 
     async def __call__(self, make_request, bot, method):
         language = chat_language(getattr(method, "chat_id", None))
+        # Aiogram keeps the bot's default parse mode on the Bot object; many
+        # generated methods still have method.parse_mode=None at middleware
+        # time. Honor that default so custom emoji entities actually render.
+        effective_parse_mode = getattr(method, "parse_mode", None)
+        if effective_parse_mode is None:
+            effective_parse_mode = getattr(getattr(bot, "default", None), "parse_mode", None)
         for field in ("text", "caption"):
             value = getattr(method, field, None)
             entities_field = "caption_entities" if field == "caption" else "entities"
             if (
                 value
                 and hasattr(method, "parse_mode")
-                and getattr(method, "parse_mode", None) is not None
+                and effective_parse_mode is not None
                 and not getattr(method, entities_field, None)
             ):
                 if language == "en":
@@ -1268,18 +1295,14 @@ class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
 
 @user_dp.callback_query(F.data.in_({"signals_accept", "signals_decline"}))
 async def signal_consent_handler(callback: CallbackQuery):
-    user = get_user(callback.from_user.id)
+    user = await get_user_async(callback.from_user.id)
     if not user or user[3] != "active":
         await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
         return
 
     accepted = callback.data == "signals_accept"
     enabled = 1 if accepted else 0
-    with connect_db() as conn:
-        conn.execute(
-            "UPDATE users SET signals_consent=?, notifications=? WHERE user_id=?",
-            (enabled, enabled, callback.from_user.id),
-        )
+    await asyncio.to_thread(set_notification_preferences, callback.from_user.id, enabled)
 
     status = (
         "✅ <b>СИГНАЛЫ ВКЛЮЧЕНЫ</b>\nВы будете получать новые сигналы."
@@ -1362,18 +1385,13 @@ async def crypto_pairs_handler(callback: CallbackQuery):
 
 @user_dp.callback_query(F.data == "binary_all_pairs")
 async def binary_all_pairs(callback: CallbackQuery):
-    await show_pair_page(callback, 0)
     await callback.answer()
+    await show_pair_page(callback, 0)
 
 
 async def show_pair_page(callback: CallbackQuery, offset):
-    pairs = {pair: {"count": 0, "last_id": None} for pair in TRACKED_BINARY_PAIRS}
-    with connect_db() as conn:
-        posts = conn.execute("SELECT message_id, text FROM source_posts ORDER BY created_at DESC").fetchall()
-    for message_id, body in posts:
-        for pair in extract_pairs(body):
-            pairs.setdefault(pair, {"count": 0, "last_id": message_id})["count"] += 1
-    if not pairs:
+    ordered = await asyncio.to_thread(load_pair_summary)
+    if not ordered:
         await callback.message.edit_text(
             "💱 <b>ВАЛЮТНЫЕ ПАРЫ</b>\n\n"
             "В сохранённых публикациях пока не найдено сигналов с распознанными валютными парами.",
@@ -1382,7 +1400,6 @@ async def show_pair_page(callback: CallbackQuery, offset):
             ]),
         )
         return
-    ordered = sorted(pairs.items(), key=lambda item: (-item[1]["count"], item[0]))
     page_size = 20
     page = ordered[offset:offset + page_size]
     lines = [f"💱 <b>ВАЛЮТНЫЕ ПАРЫ</b> · {offset+1}–{offset+len(page)} из {len(ordered)}", "━━━━━━━━━━━━━━━━━━"]
@@ -1401,6 +1418,16 @@ async def show_pair_page(callback: CallbackQuery, offset):
     await callback.message.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
 
 
+def load_pair_summary():
+    pairs = {pair: {"count": 0, "last_id": None} for pair in TRACKED_BINARY_PAIRS}
+    with connect_db() as conn:
+        posts = conn.execute("SELECT message_id, text FROM source_posts ORDER BY created_at DESC").fetchall()
+    for message_id, body in posts:
+        for pair in extract_pairs(body):
+            pairs.setdefault(pair, {"count": 0, "last_id": message_id})["count"] += 1
+    return sorted(pairs.items(), key=lambda item: (-item[1]["count"], item[0]))
+
+
 @user_dp.callback_query(F.data.startswith("pairs_page:"))
 async def pair_page_callback(callback: CallbackQuery):
     try:
@@ -1408,18 +1435,15 @@ async def pair_page_callback(callback: CallbackQuery):
     except ValueError:
         await callback.answer(localized_user_text(callback.from_user.id, "Некорректная страница."), show_alert=True)
         return
-    await show_pair_page(callback, offset)
     await callback.answer()
+    await show_pair_page(callback, offset)
 
 
 @user_dp.callback_query(F.data == "binary_recent_10")
 async def binary_recent_signals(callback: CallbackQuery):
+    await callback.answer()
     cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
-    with connect_db() as conn:
-        posts = conn.execute(
-            "SELECT message_id, text, created_at FROM source_posts WHERE created_at>=? ORDER BY created_at DESC",
-            (cutoff,),
-        ).fetchall()
+    posts = await asyncio.to_thread(load_recent_source_posts, cutoff)
     counts = {}
     unknown = []
     total = 0
@@ -1441,7 +1465,6 @@ async def binary_recent_signals(callback: CallbackQuery):
                 [colored_button("⬅️ Назад", "binary_menu", "primary")],
             ]),
         )
-        await callback.answer()
         return
 
     lines = ["📊 <b>СТАТИСТИКА ЗА ПОСЛЕДНИЕ 10 МИНУТ</b>", "━━━━━━━━━━━━━━━━━━"]
@@ -1462,15 +1485,22 @@ async def binary_recent_signals(callback: CallbackQuery):
             [colored_button("⬅️ Назад", "binary_menu", "primary")],
         ]),
     )
-    await callback.answer()
+
+
+def load_recent_source_posts(cutoff):
+    with connect_db() as conn:
+        posts = conn.execute(
+            "SELECT message_id, text, created_at FROM source_posts WHERE created_at>=? ORDER BY created_at DESC",
+            (cutoff,),
+        ).fetchall()
+    return posts
 
 
 @user_dp.callback_query(F.data.startswith("pair:"))
 async def binary_pair_history(callback: CallbackQuery):
     pair = callback.data.split(":", 1)[1]
-    with connect_db() as conn:
-        posts = conn.execute("SELECT message_id, text, created_at FROM source_posts ORDER BY created_at DESC").fetchall()
-    matched = [(body, created) for _, body, created in posts if pair in extract_pairs(body)][:10]
+    await callback.answer()
+    matched = await asyncio.to_thread(load_pair_history, pair)
     lines = [f"💱 <b>{html.escape(pair)}</b> · последние сигналы", "━━━━━━━━━━━━━━━━━━"]
     for body, created in matched:
         excerpt = html.escape((body or "").strip()[:500])
@@ -1483,7 +1513,12 @@ async def binary_pair_history(callback: CallbackQuery):
             [colored_button("⬅️ К списку пар", "binary_all_pairs", "primary")],
         ]),
     )
-    await callback.answer()
+
+
+def load_pair_history(pair):
+    with connect_db() as conn:
+        posts = conn.execute("SELECT message_id, text, created_at FROM source_posts ORDER BY created_at DESC").fetchall()
+    return [(body, created) for _, body, created in posts if pair in extract_pairs(body)][:10]
 
 
 @user_dp.callback_query(F.data == "binary_menu")
@@ -1798,22 +1833,7 @@ async def history_handler(message: Message):
         return
 
     since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    with connect_db() as conn:
-        channel_rows = conn.execute("""
-            SELECT message_id, text, created_at
-            FROM source_posts
-            WHERE created_at >= ? OR COALESCE(updated_at, created_at) >= ?
-            ORDER BY message_id DESC
-            LIMIT 50
-        """, (since, since)).fetchall()
-
-        manual_rows = conn.execute("""
-            SELECT id, instrument, direction, timeframe, details, created_at
-            FROM signals
-            WHERE (created_by != 0 OR created_by IS NULL) AND created_at >= ?
-            ORDER BY id DESC
-            LIMIT 50
-        """, (since,)).fetchall()
+    channel_rows, manual_rows = await asyncio.to_thread(load_history_rows, since)
 
     channel_rows = [row for row in channel_rows if is_signal_record("", row[1])][:50]
     manual_rows = [row for row in manual_rows if is_signal_record(row[1], row[4])]
@@ -1841,6 +1861,26 @@ async def history_handler(message: Message):
     await message.answer(text[:4000])
 
 
+def load_history_rows(since):
+    """Fetch history without holding up the Telegram event loop on SQL I/O."""
+    with connect_db() as conn:
+        channel_rows = conn.execute("""
+            SELECT message_id, text, created_at
+            FROM source_posts
+            WHERE created_at >= ? OR COALESCE(updated_at, created_at) >= ?
+            ORDER BY message_id DESC
+            LIMIT 50
+        """, (since, since)).fetchall()
+        manual_rows = conn.execute("""
+            SELECT id, instrument, direction, timeframe, details, created_at
+            FROM signals
+            WHERE (created_by != 0 OR created_by IS NULL) AND created_at >= ?
+            ORDER BY id DESC
+            LIMIT 50
+        """, (since,)).fetchall()
+    return channel_rows, manual_rows
+
+
 # =========================================================
 # AUTOMATIC BOT
 # =========================================================
@@ -1866,7 +1906,7 @@ async def autotrade_handler(message: Message):
 
 
 async def _show_broker_choices(callback: CallbackQuery, back_callback: str):
-    user = get_user(callback.from_user.id)
+    user = await get_user_async(callback.from_user.id)
     if not user or user[3] != "active":
         await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
         return
@@ -1893,7 +1933,7 @@ async def broker_choice_from_signal_handler(callback: CallbackQuery):
 
 @user_dp.callback_query(F.data == "broker_back_autotrade")
 async def broker_back_autotrade_handler(callback: CallbackQuery):
-    user = get_user(callback.from_user.id)
+    user = await get_user_async(callback.from_user.id)
     if not user or user[3] != "active":
         await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
         return
@@ -1903,7 +1943,7 @@ async def broker_back_autotrade_handler(callback: CallbackQuery):
 
 @user_dp.callback_query(F.data == "broker_back_signal")
 async def broker_back_signal_handler(callback: CallbackQuery):
-    user = get_user(callback.from_user.id)
+    user = await get_user_async(callback.from_user.id)
     if not user or user[3] != "active":
         await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
         return
@@ -1913,7 +1953,7 @@ async def broker_back_signal_handler(callback: CallbackQuery):
 
 @user_dp.callback_query(F.data == "support_admin")
 async def support_admin_start(callback: CallbackQuery, state: FSMContext):
-    user = get_user(callback.from_user.id)
+    user = await get_user_async(callback.from_user.id)
     if not user or user[3] != "active":
         await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
         return
@@ -1984,7 +2024,7 @@ async def profile_handler(message: Message):
     if not await check_user(message):
         return
 
-    user = get_user(message.from_user.id)
+    user = await get_user_async(message.from_user.id)
     username = "@" + user[1] if user[1] else "не указан"
     status = {
         "active": "🟢 АКТИВЕН",
@@ -2014,7 +2054,7 @@ async def profile_handler(message: Message):
 async def notifications_handler(message: Message):
     if not await check_user(message):
         return
-    user = get_user(message.from_user.id)
+    user = await get_user_async(message.from_user.id)
     enabled = bool(user[4])
     await message.answer(
         "🔔 УВЕДОМЛЕНИЯ\n━━━━━━━━━━━━━━━━━━\n\n"
@@ -2033,7 +2073,7 @@ async def settings_handler(message: Message):
 
 @user_dp.callback_query(F.data == "toggle_notifications")
 async def toggle_notifications(callback: CallbackQuery):
-    user = get_user(callback.from_user.id)
+    user = await get_user_async(callback.from_user.id)
 
     if not user or user[3] != "active":
         await callback.answer(localized_user_text(callback.from_user.id, "Доступ ограничен."), show_alert=True)
@@ -2041,13 +2081,9 @@ async def toggle_notifications(callback: CallbackQuery):
 
     enabled = not bool(user[4])
 
-    with connect_db() as conn:
-        conn.execute(
-            "UPDATE users SET notifications=?, signals_consent=? WHERE user_id=?",
-            (int(enabled), int(enabled), callback.from_user.id),
-        )
+    await asyncio.to_thread(set_notification_preferences, callback.from_user.id, enabled)
 
-    user = get_user(callback.from_user.id)
+    user = await get_user_async(callback.from_user.id)
     if "УВЕДОМЛЕНИЯ" in (callback.message.text or "").upper() or "NOTIFICATIONS" in (callback.message.text or "").upper():
         await callback.message.edit_text(
             "🔔 УВЕДОМЛЕНИЯ\n━━━━━━━━━━━━━━━━━━\n\n"
@@ -2068,24 +2104,20 @@ async def toggle_notifications(callback: CallbackQuery):
 
 @user_dp.callback_query(F.data.in_(["lang_ru", "lang_en"]))
 async def language_handler(callback: CallbackQuery):
-    if not get_user(callback.from_user.id):
+    if not await get_user_async(callback.from_user.id):
         await callback.answer(localized_user_text(callback.from_user.id, "Сначала нажмите /start."), show_alert=True)
         return
 
     language = "ru" if callback.data == "lang_ru" else "en"
 
-    with connect_db() as conn:
-        conn.execute(
-            "UPDATE users SET language=? WHERE user_id=?",
-            (language, callback.from_user.id),
-        )
+    await asyncio.to_thread(set_user_language, callback.from_user.id, language)
 
     await callback.answer(
         "Язык интерфейса изменён на русский."
         if language == "ru"
         else "Interface language changed to English."
     )
-    current_user = get_user(callback.from_user.id)
+    current_user = await get_user_async(callback.from_user.id)
     enabled = bool(current_user[4]) if current_user else True
     notice = (
         "🔔 УВЕДОМЛЕНИЯ\n━━━━━━━━━━━━━━━━━━\n\n"
@@ -2102,7 +2134,7 @@ async def language_handler(callback: CallbackQuery):
 
 @user_dp.callback_query(F.data == "profile")
 async def profile_callback(callback: CallbackQuery):
-    user = get_user(callback.from_user.id)
+    user = await get_user_async(callback.from_user.id)
 
     if not user:
         await callback.answer(localized_user_text(callback.from_user.id, "Сначала нажмите /start."), show_alert=True)
@@ -2175,35 +2207,21 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
     post_text = message.text or message.caption or ""
     posted_at = now()
 
-    # Record the source post once. On a duplicate Telegram update, retry only
-    # deliveries that have not yet been recorded as successful.
+    # Keep database connection and transaction work away from the event loop.
     try:
-        with connect_db() as conn:
-            inserted = conn.execute("""
-                INSERT INTO source_posts (message_id, text, created_at, updated_at)
-                VALUES (?, ?, ?, ?)
-                ON CONFLICT DO NOTHING
-            """, (message.message_id, post_text, posted_at, posted_at)).rowcount
-            ensure_source_signal_record(
-                conn, message.message_id, post_text, posted_at
-            )
-            if not inserted:
-                log.info("Resuming undelivered recipients for source post %s.", message.message_id)
+        inserted = await asyncio.to_thread(
+            persist_source_post, message.message_id, post_text, posted_at
+        )
+        if not inserted:
+            log.info("Resuming undelivered recipients for source post %s.", message.message_id)
     except sqlite3.Error:
         log.exception("Could not save source-channel entry.")
-        record_runtime_error("source_post_storage", "Could not save source-channel entry")
+        await asyncio.to_thread(
+            record_runtime_error, "source_post_storage", "Could not save source-channel entry"
+        )
         return
 
-    with connect_db() as conn:
-        recipients = conn.execute("""
-            SELECT u.user_id
-            FROM users AS u
-            WHERE u.status='active' AND u.notifications=1 AND u.signals_consent=1
-              AND NOT EXISTS (
-                SELECT 1 FROM source_deliveries AS d
-                WHERE d.source_message_id=? AND d.user_id=u.user_id
-              )
-        """, (message.message_id,)).fetchall()
+    recipients = await asyncio.to_thread(get_undelivered_recipients, message.message_id)
 
     sent = 0
     failed = 0
@@ -2219,19 +2237,15 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                     message_id=message.message_id,
                     reply_markup=signal_action_keyboard(),
                 )
-            with connect_db() as conn:
-                conn.execute(
-                    "INSERT OR IGNORE INTO source_deliveries "
-                    "(source_message_id, user_id, copied_message_id) VALUES (?, ?, ?)",
-                    (message.message_id, user_id, copied.message_id),
-                )
-            record_delivery(message.message_id, user_id, "sent")
+            await asyncio.to_thread(
+                save_source_delivery, message.message_id, user_id, copied.message_id
+            )
             sent += 1
         except TelegramAPIError as error:
             failed += 1
             try:
-                record_delivery(message.message_id, user_id, "failed", error)
-                record_runtime_error("signal_delivery", error)
+                await asyncio.to_thread(record_delivery, message.message_id, user_id, "failed", error)
+                await asyncio.to_thread(record_runtime_error, "signal_delivery", error)
             except Exception:
                 log.exception("Could not record failed delivery")
             log.warning(
@@ -2243,8 +2257,8 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
             failed += 1
             error = "Could not record source delivery"
             try:
-                record_delivery(message.message_id, user_id, "failed", error)
-                record_runtime_error("signal_delivery", error)
+                await asyncio.to_thread(record_delivery, message.message_id, user_id, "failed", error)
+                await asyncio.to_thread(record_runtime_error, "signal_delivery", error)
             except Exception:
                 log.exception("Could not record failed delivery")
             log.exception("Could not record source delivery for user %s", user_id)
@@ -2258,44 +2272,98 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
     )
 
 
+def persist_source_post(message_id, post_text, posted_at):
+    """Store one source message and create its signal row idempotently."""
+    with connect_db() as conn:
+        inserted = conn.execute("""
+            INSERT INTO source_posts (message_id, text, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
+        """, (message_id, post_text, posted_at, posted_at)).rowcount
+        ensure_source_signal_record(conn, message_id, post_text, posted_at)
+    return inserted
+
+
+def get_undelivered_recipients(message_id):
+    with connect_db() as conn:
+        return conn.execute("""
+            SELECT u.user_id
+            FROM users AS u
+            WHERE u.status='active' AND u.notifications=1 AND u.signals_consent=1
+              AND NOT EXISTS (
+                SELECT 1 FROM source_deliveries AS d
+                WHERE d.source_message_id=? AND d.user_id=u.user_id
+              )
+        """, (message_id,)).fetchall()
+
+
+def save_source_delivery(message_id, user_id, copied_message_id):
+    with connect_db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO source_deliveries "
+            "(source_message_id, user_id, copied_message_id) VALUES (?, ?, ?)",
+            (message_id, user_id, copied_message_id),
+        )
+        conn.execute(
+            "INSERT INTO delivery_events "
+            "(source_message_id, user_id, status, error, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (message_id, user_id, "sent", "", now()),
+        )
+
+
 @user_dp.edited_channel_post(F.chat.id == SOURCE_CHANNEL_ID)
 async def signals_pro_edited_handler(message: Message, bot: Bot):
     source_text = message.text or message.caption or ""
     edited_at = now()
+    deliveries = await asyncio.to_thread(
+        persist_source_edit, message.message_id, source_text, edited_at
+    )
+    updated = 0
+    semaphore = asyncio.Semaphore(8)
+
+    async def update_recipient(user_id, copied_id):
+        nonlocal updated
+        try:
+            async with semaphore:
+                if message.text or message.caption is not None:
+                    await decorate_signal_copy(
+                        bot, user_id, copied_id, message, allow_regular_fallback=True
+                    )
+            updated += 1
+        except TelegramBadRequest as error:
+            if "message is not modified" not in str(error).lower():
+                await asyncio.to_thread(record_runtime_error, "signal_edit", error)
+                log.warning("Could not edit forwarded post for %s: %s", user_id, error)
+        except TelegramAPIError as error:
+            await asyncio.to_thread(record_runtime_error, "signal_edit", error)
+            log.exception("Could not update forwarded post for user %s", user_id)
+
+    await asyncio.gather(*(update_recipient(user_id, copied_id) for user_id, copied_id in deliveries))
+    log.info("Source entry edit synchronized for %s users", updated)
+
+
+def persist_source_edit(message_id, source_text, edited_at):
+    """Persist the source edit and read its recipients in a worker thread."""
     with connect_db() as conn:
         conn.execute(
             "INSERT INTO source_posts (message_id, text, created_at, updated_at) "
             "VALUES (?, ?, ?, ?) ON CONFLICT(message_id) DO UPDATE SET "
             "text=excluded.text, updated_at=excluded.updated_at",
-            (message.message_id, source_text, edited_at, edited_at),
+            (message_id, source_text, edited_at, edited_at),
         )
         ensure_source_signal_record(
-            conn, message.message_id, source_text, edited_at
+            conn, message_id, source_text, edited_at
         )
         conn.execute(
             "UPDATE signals SET details=? WHERE source_message_id=?",
-            (source_text[:3000], message.message_id),
+            (source_text[:3000], message_id),
         )
         deliveries = conn.execute(
             "SELECT user_id, copied_message_id FROM source_deliveries WHERE source_message_id=?",
-            (message.message_id,),
+            (message_id,),
         ).fetchall()
-    updated = 0
-    for user_id, copied_id in deliveries:
-        try:
-            if message.text or message.caption is not None:
-                await decorate_signal_copy(
-                    bot, user_id, copied_id, message, allow_regular_fallback=True
-                )
-            updated += 1
-            await asyncio.sleep(0.05)
-        except TelegramBadRequest as error:
-            if "message is not modified" not in str(error).lower():
-                record_runtime_error("signal_edit", error)
-                log.warning("Could not edit forwarded post for %s: %s", user_id, error)
-        except TelegramAPIError:
-            log.exception("Could not update forwarded post for user %s", user_id)
-    log.info("Source entry edit synchronized for %s users", updated)
+    return deliveries
 
 
 # =========================================================
