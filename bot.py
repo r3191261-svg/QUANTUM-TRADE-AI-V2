@@ -2114,53 +2114,42 @@ async def profile_callback(callback: CallbackQuery):
 # =========================================================
 
 async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_regular_fallback=False):
-    """Normalize result stickers in a copied post to one standard Unicode emoji."""
+    """Replace a copied post's content with the source text/entities verbatim."""
     if message.text:
         limit = 4096
         edit = bot.edit_message_text
         field = "text"
+        entities = getattr(message, "entities", None) or []
     elif message.caption is not None:
         limit = 1024
         edit = bot.edit_message_caption
         field = "caption"
+        entities = getattr(message, "caption_entities", None) or []
     else:
         return
 
-    if len(message.text or message.caption or "") > limit - 3:
+    original = message.text or message.caption or ""
+    if len(original) > limit:
         return
 
-    original = message.text or message.caption or ""
-    status_emojis = re.compile(r"✅|☑️?|✔️?|🗸|✓|⏳|⌛|⭕|❌|✖️?|➖|🔴")
-    has_result_marker = bool(status_emojis.search(original))
-    # Forward a fresh pair exactly as published until its source post records
-    # an outcome. Never invent a loss marker merely because the result is pending.
-    if not has_result_marker and not allow_regular_fallback:
-        return
-    normalized = status_emojis.sub("", original)
-    normalized = re.sub(r"[ \t]{2,}", " ", normalized)
-    normalized = re.sub(r" *\n *", "\n", normalized).strip()
-    decorated = (
-        f"{normalized} {signal_result_marker(original)}".strip()
-        if has_result_marker else original
-    )
     common = {
         "chat_id": user_id,
         "message_id": copied_message_id,
         "reply_markup": signal_action_keyboard(),
-        # Signal copies intentionally keep ordinary Unicode emoji. The global
-        # request middleware skips emoji conversion when parse_mode is None.
+        "entities": entities,
+        # Keep source formatting and custom emoji entities unchanged.
         "parse_mode": None,
     }
     try:
         if field == "text":
-            await edit(**common, text=decorated)
+            await edit(**common, text=original)
         else:
-            await edit(**common, caption=decorated)
+            await edit(**common, caption=original)
     except TelegramBadRequest as error:
         if "message is not modified" not in str(error).lower():
-            log.warning("Could not normalize emojis in forwarded signal: %s", error)
+            log.warning("Could not synchronize source content in forwarded signal: %s", error)
     except TelegramAPIError:
-        log.exception("Could not normalize emojis in forwarded signal %s", copied_message_id)
+        log.exception("Could not synchronize forwarded signal %s", copied_message_id)
 
 @user_dp.channel_post(F.chat.id == SOURCE_CHANNEL_ID)
 async def signals_pro_channel_handler(message: Message, bot: Bot):
@@ -2217,7 +2206,6 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                     message_id=message.message_id,
                     reply_markup=signal_action_keyboard(),
                 )
-                await decorate_signal_copy(bot, user_id, copied.message_id, message)
             with connect_db() as conn:
                 conn.execute(
                     "INSERT OR IGNORE INTO source_deliveries "

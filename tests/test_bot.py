@@ -257,12 +257,18 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
             "GBP/JPY · m5 · вверх",
         )
 
-    async def test_forwarded_signal_collapses_mixed_result_emojis(self):
+    async def test_forwarded_signal_edit_preserves_source_emoji_and_entities(self):
         telegram = FakeTelegramBot()
-        post = SimpleNamespace(text="GBPJPY m5 вверх ☑️\n✅ ✔", caption=None)
+        source_entities = [SimpleNamespace(type="custom_emoji", custom_emoji_id="source-check")]
+        post = SimpleNamespace(
+            text="GBPJPY m5 вверх ⌛ ⌛ ✅",
+            caption=None,
+            entities=source_entities,
+        )
         await bot.decorate_signal_copy(telegram, 101, 901, post)
         self.assertEqual(len(telegram.edits), 1)
-        self.assertEqual(telegram.edits[0]["text"], "GBPJPY m5 вверх ✅")
+        self.assertEqual(telegram.edits[0]["text"], "GBPJPY m5 вверх ⌛ ⌛ ✅")
+        self.assertEqual(telegram.edits[0]["entities"], source_entities)
 
     async def test_animated_emoji_require_an_exact_pack_match(self):
         old_pack = bot._CUSTOM_EMOJI_PACK
