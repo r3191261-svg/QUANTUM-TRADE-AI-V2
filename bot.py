@@ -1704,12 +1704,12 @@ def signal_result_marker(details):
     return {"win": "✅", "loss": "❌", "pending": ""}[signal_result_kind(details)]
 
 
-def history_signal_marker(details):
+def history_signal_marker(details, check_emoji="✅"):
     """Keep source hourglass status and decorate confirmed history outcomes."""
     result = signal_result_kind(details)
     if result == "win":
         hourglass = "⌛ " if "⌛" in (details or "") else ""
-        return f"{hourglass}✅"
+        return f"{hourglass}{check_emoji}"
     return {"loss": "❌", "pending": ""}[result]
 
 
@@ -1791,12 +1791,14 @@ async def statistics_handler(message: Message):
             wins += 1
         elif result_kind == "loss":
             losses += 1
+    check_emoji = await custom_emoji_markup(message.bot, "✅")
     await message.answer(
         "📊 РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 24 ЧАСА\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         f"📨 Сигналов за сутки: {len(recent_signals)}\n"
-        f"✅ WIN: {wins}\n"
-        f"❌ LOSS: {losses}"
+        f"{check_emoji} WIN: {wins}\n"
+        f"{custom_emoji_entity('❌', next_custom_emoji_id('❌'))} LOSS: {losses}",
+        parse_mode=ParseMode.HTML,
     )
 
 
@@ -1842,23 +1844,25 @@ async def history_handler(message: Message):
         await message.answer("🕘 История сигналов пока пуста.")
         return
 
+    check_emoji = await custom_emoji_markup(message.bot, "✅")
     text = "<b>🕘 ИСТОРИЯ СИГНАЛОВ ЗА 24 ЧАСА</b>\n━━━━━━━━━━━━━━━━━━\n"
 
     for row in channel_rows:
         body = (row[1] or "").strip()
         text += (
-            f"\n<b>{html.escape(compact_signal_text(body))}</b> {history_signal_marker(body)}\n"
+            f"\n<b>{html.escape(compact_signal_text(body))}</b> "
+            f"{history_signal_marker(body, check_emoji)}\n"
             "──────────────\n"
         )
 
     for row in manual_rows:
         text += (
             f"\n<b>{html.escape(row[1] or '')} · {html.escape(row[3] or '')} · "
-            f"{html.escape(row[2] or '')}</b> {history_signal_marker(row[4])}\n"
+            f"{html.escape(row[2] or '')}</b> {history_signal_marker(row[4], check_emoji)}\n"
             "──────────────\n"
         )
 
-    await message.answer(text[:4000])
+    await message.answer(text[:4000], parse_mode=ParseMode.HTML)
 
 
 def load_history_rows(since):
