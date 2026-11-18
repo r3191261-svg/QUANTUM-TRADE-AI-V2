@@ -1791,15 +1791,20 @@ async def statistics_handler(message: Message):
             wins += 1
         elif result_kind == "loss":
             losses += 1
-    check_emoji = await custom_emoji_markup(message.bot, "✅")
-    await message.answer(
+    check_emoji = (
+        await custom_emoji_markup(message.bot, "✅")
+        if getattr(message, "bot", None)
+        else "✅"
+    )
+    statistics_text = (
         "📊 РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 24 ЧАСА\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         f"📨 Сигналов за сутки: {len(recent_signals)}\n"
         f"{check_emoji} WIN: {wins}\n"
-        f"{custom_emoji_entity('❌', next_custom_emoji_id('❌'))} LOSS: {losses}",
-        parse_mode=ParseMode.HTML,
+        f"{custom_emoji_entity('❌', next_custom_emoji_id('❌'))} LOSS: {losses}"
     )
+    answer_kwargs = {"parse_mode": ParseMode.HTML} if getattr(message, "bot", None) else {}
+    await message.answer(statistics_text, **answer_kwargs)
 
 
 def load_recent_signal_rows(since):
@@ -1844,7 +1849,11 @@ async def history_handler(message: Message):
         await message.answer("🕘 История сигналов пока пуста.")
         return
 
-    check_emoji = await custom_emoji_markup(message.bot, "✅")
+    check_emoji = (
+        await custom_emoji_markup(message.bot, "✅")
+        if getattr(message, "bot", None)
+        else "✅"
+    )
     text = "<b>🕘 ИСТОРИЯ СИГНАЛОВ ЗА 24 ЧАСА</b>\n━━━━━━━━━━━━━━━━━━\n"
 
     for row in channel_rows:
@@ -1862,7 +1871,8 @@ async def history_handler(message: Message):
             "──────────────\n"
         )
 
-    await message.answer(text[:4000], parse_mode=ParseMode.HTML)
+    answer_kwargs = {"parse_mode": ParseMode.HTML} if getattr(message, "bot", None) else {}
+    await message.answer(text[:4000], **answer_kwargs)
 
 
 def load_history_rows(since):
