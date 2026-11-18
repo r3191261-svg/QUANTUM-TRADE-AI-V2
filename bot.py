@@ -119,13 +119,16 @@ INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif"
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
 INTRO_VIDEO_PATH = os.getenv("INTRO_VIDEO_PATH", "assets/quantum_trade_ai_promo.mp4")
 DEFAULT_CUSTOM_EMOJI_PACKS = (
-    "svoy_v_alfe,AR_PREMIUM,TrendsEmoji,zholto_rozovij,NewsEmoji,FlagsByKoylli,tgiosicons"
+    "svoy_v_alfe,AR_PREMIUM,TrendsEmoji,zholto_rozovij,NewsEmoji,FlagsByKoylli,tgiosicons,CuteEmoji"
 )
-CUSTOM_EMOJI_PACK_NAMES = tuple(
-    name.strip()
-    for name in os.getenv("CUSTOM_EMOJI_PACK_NAMES", DEFAULT_CUSTOM_EMOJI_PACKS).split(",")
-    if name.strip()
-)
+CUSTOM_EMOJI_PACK_NAMES = tuple(dict.fromkeys([
+    *(
+        name.strip()
+        for name in os.getenv("CUSTOM_EMOJI_PACK_NAMES", DEFAULT_CUSTOM_EMOJI_PACKS).split(",")
+        if name.strip()
+    ),
+    "CuteEmoji",
+]))
 _CUSTOM_EMOJI_PACK = None
 ANIMATED_EMOJI_TARGETS = (
     "🗓", "📅", "🕘", "🕒", "🤖", "➡️", "🇷🇺", "🇬🇧", "✏️", "🗞", "🛜", "📈", "📊",
@@ -889,7 +892,13 @@ async def setup_custom_emojis(bot):
                     or getattr(sticker, "is_video", False)
                 )
                 if custom_id and is_animated and is_single_emoji_fallback(emoji):
-                    _CUSTOM_EMOJI_PACK.setdefault(emoji, []).append(custom_id)
+                    emoji_ids = _CUSTOM_EMOJI_PACK.setdefault(emoji, [])
+                    # Prefer the user's CuteEmoji pack for the animated green
+                    # check used in statistics. Keep the existing cross mapping.
+                    if emoji == "✅" and pack_name == "CuteEmoji":
+                        emoji_ids.insert(0, custom_id)
+                    else:
+                        emoji_ids.append(custom_id)
                     pack_count += 1
             log.info("Loaded %d custom emojis from %s", pack_count, pack_name)
         except Exception:
@@ -1656,8 +1665,12 @@ def signal_result_marker(details):
 
 
 def history_signal_marker(details):
-    """Show a regular check/cross after a result; pending rows have no mark."""
-    return signal_result_marker(details)
+    """Keep source hourglass status and decorate confirmed history outcomes."""
+    result = signal_result_kind(details)
+    if result == "win":
+        hourglass = "⌛ " if "⌛" in (details or "") else ""
+        return f"{hourglass}✅"
+    return {"loss": "❌", "pending": ""}[result]
 
 
 def is_signal_record(instrument, details):
