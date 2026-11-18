@@ -884,6 +884,7 @@ async def setup_custom_emojis(bot):
         try:
             sticker_set = await get_sticker_set(pack_name)
             pack_count = 0
+            cute_check_id = None
             for sticker in sticker_set.stickers:
                 custom_id = getattr(sticker, "custom_emoji_id", None)
                 emoji = sticker.emoji or ""
@@ -892,14 +893,18 @@ async def setup_custom_emojis(bot):
                     or getattr(sticker, "is_video", False)
                 )
                 if custom_id and is_animated and is_single_emoji_fallback(emoji):
-                    emoji_ids = _CUSTOM_EMOJI_PACK.setdefault(emoji, [])
-                    # Prefer the user's CuteEmoji pack for the animated green
-                    # check used in statistics. Keep the existing cross mapping.
-                    if emoji == "✅" and pack_name == "CuteEmoji":
-                        emoji_ids.insert(0, custom_id)
-                    else:
-                        emoji_ids.append(custom_id)
+                    _CUSTOM_EMOJI_PACK.setdefault(emoji, []).append(custom_id)
+                    # Prefer the first animated check sticker in CuteEmoji,
+                    # even when Telegram labels it with a checkmark variant.
+                    if pack_name == "CuteEmoji" and emoji in ("✅", *ANIMATED_EMOJI_ALIASES["✅"]):
+                        cute_check_id = cute_check_id or custom_id
                     pack_count += 1
+            if cute_check_id:
+                check_ids = _CUSTOM_EMOJI_PACK.setdefault("✅", [])
+                _CUSTOM_EMOJI_PACK["✅"] = [
+                    cute_check_id,
+                    *(item for item in check_ids if item != cute_check_id),
+                ]
             log.info("Loaded %d custom emojis from %s", pack_count, pack_name)
         except Exception:
             log.exception("Could not load custom emoji pack %s", pack_name)
