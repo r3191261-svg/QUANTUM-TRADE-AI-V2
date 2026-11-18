@@ -444,30 +444,20 @@ def init_db():
 
 def register_user(user):
     with connect_db() as conn:
-        conn.execute("""
-            INSERT OR IGNORE INTO users
-            (user_id, username, full_name, status,
-             notifications, language, created_at)
+        return conn.execute("""
+            INSERT INTO users
+                (user_id, username, full_name, status, notifications, language, created_at)
             VALUES (?, ?, ?, 'active', 1, 'ru', ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username=excluded.username,
+                full_name=excluded.full_name
+            RETURNING *
         """, (
             user.id,
             user.username or "",
             user.full_name or "",
             now(),
-        ))
-        conn.execute("""
-            UPDATE users
-            SET username=?, full_name=?
-            WHERE user_id=?
-        """, (
-            user.username or "",
-            user.full_name or "",
-            user.id,
-        ))
-        return conn.execute(
-            "SELECT * FROM users WHERE user_id=?",
-            (user.id,),
-        ).fetchone()
+        )).fetchone()
 
 
 def get_user(user_id):
@@ -710,7 +700,7 @@ async def check_user(message):
     if not message.from_user:
         return False
 
-    user = register_user(message.from_user)
+    user = await asyncio.to_thread(register_user, message.from_user)
     if user and user[3] in ("blocked", "suspended"):
         await message.answer(
             "⛔ Доступ временно ограничен.\nОбратитесь в поддержку."
@@ -723,7 +713,7 @@ async def check_user(message):
 async def check_admin(message):
     if not message.from_user:
         return False
-    if not is_admin(message.from_user.id):
+    if not await asyncio.to_thread(is_admin, message.from_user.id):
         await message.answer(
             "⛔ Нет прав администратора.\n"
             f"Ваш Telegram ID: <code>{message.from_user.id}</code>\n"
@@ -769,7 +759,7 @@ async def start_handler(message: Message):
     if not message.from_user:
         return
 
-    user = register_user(message.from_user)
+    user = await asyncio.to_thread(register_user, message.from_user)
     if user and user[3] in ("blocked", "suspended"):
         await message.answer("⛔ Доступ временно ограничен.\nОбратитесь в поддержку.")
         return
@@ -1648,8 +1638,7 @@ async def calendar_handler(message: Message):
 
 def signal_result_kind(details):
     result_text = (details or "").upper()
-    # A check is the published result even when the source also leaves its
-    # entry timer (⌛) in the post. A missed entry is a loss, never a wait.
+    # Final result marks take priority over a timer left in the source post.
     if re.search(
         r"\b(LOSS|LOSE|ПРОИГРЫШ|УБЫТОК|НЕ ЗАШ[ЕЁ]Л|НЕ ВОШ[ЕЁ]Л|NO ENTRY|NOT ENTERED)\b"
         r"|❌|⭕|✖️|➖|🔴",
@@ -1658,16 +1647,16 @@ def signal_result_kind(details):
         return "loss"
     if re.search(r"\b(WIN|WON|ВЫИГРЫШ|ПРИБЫЛЬ)\b|✅|☑|✔|🗸|✓", result_text):
         return "win"
-    return "loss"
+    return "pending"
 
 
 def signal_result_marker(details):
-    """Use a check for a confirmed entry and a cross for every non-entry result."""
-    return "✅" if signal_result_kind(details) == "win" else "❌"
+    """Show an outcome mark only after the source publishes a result."""
+    return {"win": "✅", "loss": "❌", "pending": ""}[signal_result_kind(details)]
 
 
 def history_signal_marker(details):
-    """Show only a normal check or cross in the user's saved signal history."""
+    """Show a regular check/cross after a result; pending rows have no mark."""
     return signal_result_marker(details)
 
 
@@ -1734,17 +1723,7 @@ async def statistics_handler(message: Message):
         return
 
     since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
-    with connect_db() as conn:
-        source_rows = conn.execute(
-            "SELECT text FROM source_posts "
-            "WHERE created_at >= ? OR COALESCE(updated_at, created_at) >= ?",
-            (since, since),
-        ).fetchall()
-        manual_signals = conn.execute(
-            "SELECT instrument, details FROM signals "
-            "WHERE (created_by != 0 OR created_by IS NULL) AND created_at >= ?",
-            (since,),
-        ).fetchall()
+    source_rows, manual_signals = await asyncio.to_thread(load_recent_signal_rows, since)
     recent_signals = [text for (text,) in source_rows if is_signal_record("", text)]
     recent_signals.extend(
         details for instrument, details in manual_signals
@@ -1753,7 +1732,7 @@ async def statistics_handler(message: Message):
 
     wins = 0
     losses = 0
-    for (details,) in recent_signals:
+    for details in recent_signals:
         result_kind = signal_result_kind(details)
         if result_kind == "win":
             wins += 1
@@ -1766,6 +1745,22 @@ async def statistics_handler(message: Message):
         f"✅ WIN: {wins}\n"
         f"❌ LOSS: {losses}"
     )
+
+
+def load_recent_signal_rows(since):
+    """Read the statistics input rows without blocking Telegram's event loop."""
+    with connect_db() as conn:
+        source_rows = conn.execute(
+            "SELECT text FROM source_posts "
+            "WHERE created_at >= ? OR COALESCE(updated_at, created_at) >= ?",
+            (since, since),
+        ).fetchall()
+        manual_signals = conn.execute(
+            "SELECT instrument, details FROM signals "
+            "WHERE (created_by != 0 OR created_by IS NULL) AND created_at >= ?",
+            (since,),
+        ).fetchall()
+    return source_rows, manual_signals
 
 
 # =========================================================

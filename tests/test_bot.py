@@ -118,6 +118,28 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("BTC/USDT", callback.message.text)
         self.assertNotIn("GBP/JPY", callback.message.text)
 
+    async def test_statistics_counts_final_results_and_ignores_pending_posts(self):
+        with bot.connect_db() as conn:
+            for message_id, text in (
+                (61, "EUR/USD BUY M5 ✅"),
+                (62, "GBP/JPY m5 вниз ❌"),
+                (63, "USD/CHF m5 вверх ⌛"),
+                (64, "Новости без валютной пары"),
+            ):
+                conn.execute(
+                    "INSERT INTO source_posts (message_id, text, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (message_id, text, bot.now(), bot.now()),
+                )
+        message = FakeMessage()
+        message.from_user = SimpleNamespace(id=101, username="tester", full_name="Tester")
+        await bot.statistics_handler(message)
+        text = message.answers[0][0]
+        self.assertIn("Сигналов за сутки: 3", text)
+        self.assertIn("WIN: 1", text)
+        self.assertIn("LOSS: 1", text)
+        self.assertEqual(bot.signal_result_marker("USDCHF m5 вверх ⌛"), "")
+
     async def test_additive_migration_preserves_legacy_user(self):
         legacy_db = Path(self._tmp.name) / "legacy.db"
         conn = sqlite3.connect(legacy_db)
