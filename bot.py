@@ -1280,9 +1280,23 @@ class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
                 and effective_parse_mode is not None
                 and not getattr(method, entities_field, None)
             ):
+                preserve_status_check = any(
+                    marker in value
+                    for marker in (
+                        "РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 24 ЧАСА",
+                        "ИСТОРИЯ СИГНАЛОВ ЗА 24 ЧАСА",
+                        "RESULTS FOR THE LAST 24 HOURS",
+                        "SIGNAL HISTORY — LAST 24 HOURS",
+                    )
+                )
+                plain_check_placeholder = "\ue000PLAIN_GREEN_CHECK\ue001"
+                if preserve_status_check:
+                    value = value.replace("✅", plain_check_placeholder)
                 if language == "en":
                     value = translate_to_english(value)
                 rendered = render_custom_emojis(value)
+                if preserve_status_check:
+                    rendered = rendered.replace(plain_check_placeholder, "✅")
                 # Telegram has no font-size control for bot messages. Use
                 # bold as the consistent, readable text treatment requested.
                 if "<code" not in rendered.lower() and "<pre" not in rendered.lower():
@@ -1709,13 +1723,15 @@ def signal_result_marker(details):
     return {"win": "✅", "loss": "❌", "pending": ""}[signal_result_kind(details)]
 
 
-def history_signal_marker(details, check_emoji="✅"):
-    """Keep source hourglass status and decorate confirmed history outcomes."""
+def history_signal_marker(details):
+    """Show source timers and the final result using ordinary emoji."""
     result = signal_result_kind(details)
+    hourglass = "⌛ " if any(mark in (details or "") for mark in STATUS_HOURGLASS_EMOJIS) else ""
     if result == "win":
-        hourglass = "⌛ " if "⌛" in (details or "") else ""
-        return f"{hourglass}{check_emoji}"
-    return {"loss": "❌", "pending": ""}[result]
+        return f"{hourglass}✅"
+    if result == "loss":
+        return f"{hourglass}❌"
+    return hourglass.rstrip()
 
 
 def is_signal_record(instrument, details):
@@ -1796,16 +1812,11 @@ async def statistics_handler(message: Message):
             wins += 1
         elif result_kind == "loss":
             losses += 1
-    check_emoji = (
-        await custom_emoji_markup(message.bot, "✅")
-        if getattr(message, "bot", None)
-        else "✅"
-    )
     statistics_text = (
         "📊 РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 24 ЧАСА\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         f"📨 Сигналов за сутки: {len(recent_signals)}\n"
-        f"{check_emoji} WIN: {wins}\n"
+        f"✅ WIN: {wins}\n"
         f"{custom_emoji_entity('❌', next_custom_emoji_id('❌'))} LOSS: {losses}"
     )
     answer_kwargs = {"parse_mode": ParseMode.HTML} if getattr(message, "bot", None) else {}
@@ -1854,25 +1865,20 @@ async def history_handler(message: Message):
         await message.answer("🕘 История сигналов пока пуста.")
         return
 
-    check_emoji = (
-        await custom_emoji_markup(message.bot, "✅")
-        if getattr(message, "bot", None)
-        else "✅"
-    )
     text = "<b>🕘 ИСТОРИЯ СИГНАЛОВ ЗА 24 ЧАСА</b>\n━━━━━━━━━━━━━━━━━━\n"
 
     for row in channel_rows:
         body = (row[1] or "").strip()
         text += (
             f"\n<b>{html.escape(compact_signal_text(body))}</b> "
-            f"{history_signal_marker(body, check_emoji)}\n"
+            f"{history_signal_marker(body)}\n"
             "──────────────\n"
         )
 
     for row in manual_rows:
         text += (
             f"\n<b>{html.escape(row[1] or '')} · {html.escape(row[3] or '')} · "
-            f"{html.escape(row[2] or '')}</b> {history_signal_marker(row[4], check_emoji)}\n"
+            f"{html.escape(row[2] or '')}</b> {history_signal_marker(row[4])}\n"
             "──────────────\n"
         )
 
@@ -2177,8 +2183,89 @@ async def profile_callback(callback: CallbackQuery):
 # SOURCE CHANNEL AUTO-FORWARDING
 # =========================================================
 
+STATUS_CHECK_EMOJIS = {"✅", "☑", "☑️", "✔", "✔️", "✓", "🗸"}
+STATUS_HOURGLASS_EMOJIS = {"⌛", "⏳"}
+
+
+def utf16_index(text, target_offset):
+    """Translate Telegram's UTF-16 entity offset into a Python string index."""
+    offset = 0
+    for index, char in enumerate(text):
+        if offset == target_offset:
+            return index
+        offset += len(char.encode("utf-16-le")) // 2
+    return len(text) if offset == target_offset else None
+
+
+def normalize_forwarded_status_entities(text, entities):
+    """Turn custom check/hourglass marks into ordinary Unicode glyphs."""
+    replacements = []
+    status_entities = set()
+    for index, entity in enumerate(entities or ()):
+        entity_type = getattr(entity, "type", None)
+        entity_type = getattr(entity_type, "value", entity_type)
+        if entity_type != "custom_emoji":
+            continue
+        start_offset = getattr(entity, "offset", 0)
+        length = getattr(entity, "length", 0)
+        start = utf16_index(text, start_offset)
+        end = utf16_index(text, start_offset + length)
+        if start is None or end is None:
+            continue
+        fallback = text[start:end]
+        if fallback in STATUS_CHECK_EMOJIS:
+            replacement = "✅"
+        elif fallback in STATUS_HOURGLASS_EMOJIS:
+            replacement = "⌛"
+        else:
+            continue
+        replacements.append((start_offset, start_offset + length, replacement))
+        status_entities.add(index)
+
+    if not replacements:
+        return text, list(entities or ()), False
+
+    replacements.sort(key=lambda item: item[0])
+    transformed = text
+    for start_offset, end_offset, replacement in reversed(replacements):
+        # These replacements do not overlap, so using original offsets against
+        # the original text is easier and avoids shifting later spans.
+        start = utf16_index(text, start_offset)
+        end = utf16_index(text, end_offset)
+        transformed = transformed[:start] + replacement + transformed[end:]
+
+    def remap_offset(offset):
+        shift = 0
+        for start, end, replacement in replacements:
+            if offset >= end:
+                replacement_units = len(replacement.encode("utf-16-le")) // 2
+                shift += replacement_units - (end - start)
+            elif offset > start:
+                break
+        return offset + shift
+
+    cleaned_entities = []
+    for index, entity in enumerate(entities or ()):
+        if index in status_entities:
+            continue
+        start = getattr(entity, "offset", 0)
+        end = start + getattr(entity, "length", 0)
+        updated = {
+            "offset": remap_offset(start),
+            "length": remap_offset(end) - remap_offset(start),
+        }
+        if hasattr(entity, "model_copy"):
+            cleaned_entities.append(entity.model_copy(update=updated))
+        else:
+            copied_entity = copy.copy(entity)
+            for field, value in updated.items():
+                setattr(copied_entity, field, value)
+            cleaned_entities.append(copied_entity)
+    return transformed, cleaned_entities, True
+
+
 async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_regular_fallback=False):
-    """Replace a copied post's content with the source text/entities verbatim."""
+    """Preserve source formatting while making check/hourglass status marks ordinary emoji."""
     if message.text:
         limit = 4096
         edit = bot.edit_message_text
@@ -2193,6 +2280,7 @@ async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_r
         return
 
     original = message.text or message.caption or ""
+    original, entities, normalized = normalize_forwarded_status_entities(original, entities)
     if len(original) > limit:
         return
 
@@ -2209,11 +2297,13 @@ async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_r
             await edit(**common, text=original)
         else:
             await edit(**common, caption=original)
+        return True
     except TelegramBadRequest as error:
         if "message is not modified" not in str(error).lower():
             log.warning("Could not synchronize source content in forwarded signal: %s", error)
     except TelegramAPIError:
         log.exception("Could not synchronize forwarded signal %s", copied_message_id)
+    return False
 
 @user_dp.channel_post(F.chat.id == SOURCE_CHANNEL_ID)
 async def signals_pro_channel_handler(message: Message, bot: Bot):
@@ -2256,6 +2346,17 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                     message_id=message.message_id,
                     reply_markup=signal_action_keyboard(),
                 )
+                source_text = message.text or message.caption or ""
+                source_entities = (
+                    getattr(message, "entities", None)
+                    if message.text
+                    else getattr(message, "caption_entities", None)
+                ) or []
+                _, _, has_custom_status = normalize_forwarded_status_entities(
+                    source_text, source_entities
+                )
+                if has_custom_status:
+                    await decorate_signal_copy(bot, user_id, copied.message_id, message)
             await asyncio.to_thread(
                 save_source_delivery, message.message_id, user_id, copied.message_id
             )
