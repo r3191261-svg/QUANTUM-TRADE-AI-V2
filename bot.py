@@ -24,6 +24,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     Message,
+    MessageEntity,
     CallbackQuery,
     ReplyKeyboardMarkup,
     KeyboardButton,
@@ -119,7 +120,7 @@ INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif"
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
 INTRO_VIDEO_PATH = os.getenv("INTRO_VIDEO_PATH", "assets/quantum_trade_ai_promo.mp4")
 DEFAULT_CUSTOM_EMOJI_PACKS = (
-    "svoy_v_alfe,AR_PREMIUM,TrendsEmoji,zholto_rozovij,NewsEmoji,FlagsByKoylli,tgiosicons,CuteEmoji"
+    "svoy_v_alfe,AR_PREMIUM,TrendsEmoji,zholto_rozovij,NewsEmoji,FlagsByKoylli,tgiosicons,CuteEmoji,PencilEmoji"
 )
 CUSTOM_EMOJI_PACK_NAMES = tuple(dict.fromkeys([
     *(
@@ -128,11 +129,12 @@ CUSTOM_EMOJI_PACK_NAMES = tuple(dict.fromkeys([
         if name.strip()
     ),
     "CuteEmoji",
+    "PencilEmoji",
 ]))
 _CUSTOM_EMOJI_PACK = None
 ANIMATED_EMOJI_TARGETS = (
     "🗓", "📅", "🕘", "🕒", "🤖", "➡️", "🇷🇺", "🇬🇧", "✏️", "🗞", "🛜", "📈", "📊",
-    "🔔", "✅", "❌", "⌛", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫", "👤",
+    "🔔", "✅", "❌", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫", "👤",
 )
 BUTTON_EMOJI_TARGETS = tuple(dict.fromkeys((*ANIMATED_EMOJI_TARGETS, "👤")))
 ANIMATED_EMOJI_ALIASES = {
@@ -905,15 +907,23 @@ async def setup_custom_emojis(bot):
         try:
             sticker_set = await get_sticker_set(pack_name)
             pack_count = 0
+            pencil_check_id = None
             cute_exact_check_id = None
             cute_variant_check_id = None
-            for sticker in sticker_set.stickers:
+            for sticker_number, sticker in enumerate(sticker_set.stickers, start=1):
                 custom_id = getattr(sticker, "custom_emoji_id", None)
                 emoji = sticker.emoji or ""
                 is_animated = bool(
                     getattr(sticker, "is_animated", False)
                     or getattr(sticker, "is_video", False)
                 )
+                if (
+                    pack_name == "PencilEmoji"
+                    and sticker_number == 12
+                    and custom_id
+                    and is_animated
+                ):
+                    pencil_check_id = custom_id
                 if custom_id and is_animated and is_single_emoji_fallback(emoji):
                     _CUSTOM_EMOJI_PACK.setdefault(emoji, []).append(custom_id)
                     # Prefer CuteEmoji's exact green-check fallback first;
@@ -931,6 +941,16 @@ async def setup_custom_emojis(bot):
                     cute_check_id,
                     *(item for item in check_ids if item != cute_check_id),
                 ]
+            if pack_name == "PencilEmoji":
+                if pencil_check_id:
+                    check_ids = _CUSTOM_EMOJI_PACK.setdefault("✅", [])
+                    _CUSTOM_EMOJI_PACK["✅"] = [
+                        pencil_check_id,
+                        *(item for item in check_ids if item != pencil_check_id),
+                    ]
+                    log.info("Selected animated check from PencilEmoji sticker 12")
+                else:
+                    log.warning("PencilEmoji sticker 12 was not available as an animated custom emoji")
             log.info("Loaded %d custom emojis from %s", pack_count, pack_name)
         except Exception:
             log.exception("Could not load custom emoji pack %s", pack_name)
@@ -1280,23 +1300,9 @@ class CustomEmojiRequestMiddleware(BaseRequestMiddleware):
                 and effective_parse_mode is not None
                 and not getattr(method, entities_field, None)
             ):
-                preserve_status_check = any(
-                    marker in value
-                    for marker in (
-                        "РЕЗУЛЬТАТЫ ЗА ПОСЛЕДНИЕ 24 ЧАСА",
-                        "ИСТОРИЯ СИГНАЛОВ ЗА 24 ЧАСА",
-                        "RESULTS FOR THE LAST 24 HOURS",
-                        "SIGNAL HISTORY — LAST 24 HOURS",
-                    )
-                )
-                plain_check_placeholder = "\ue000PLAIN_GREEN_CHECK\ue001"
-                if preserve_status_check:
-                    value = value.replace("✅", plain_check_placeholder)
                 if language == "en":
                     value = translate_to_english(value)
                 rendered = render_custom_emojis(value)
-                if preserve_status_check:
-                    rendered = rendered.replace(plain_check_placeholder, "✅")
                 # Telegram has no font-size control for bot messages. Use
                 # bold as the consistent, readable text treatment requested.
                 if "<code" not in rendered.lower() and "<pre" not in rendered.lower():
@@ -2197,39 +2203,55 @@ def utf16_index(text, target_offset):
     return len(text) if offset == target_offset else None
 
 
-def normalize_forwarded_status_entities(text, entities):
-    """Turn custom check/hourglass marks into ordinary Unicode glyphs."""
-    replacements = []
+def normalize_forwarded_status_entities(text, entities, check_custom_emoji_id=None):
+    """Use PencilEmoji's animated check and a regular hourglass in signal copies."""
+    entities = list(entities or ())
     status_entities = set()
-    for index, entity in enumerate(entities or ()):
+    changed = False
+
+    # Retain the requested check entity, but remove old check styles and any
+    # animated hourglass entity so its plain Unicode fallback is shown.
+    for index, entity in enumerate(entities):
         entity_type = getattr(entity, "type", None)
         entity_type = getattr(entity_type, "value", entity_type)
         if entity_type != "custom_emoji":
             continue
         start_offset = getattr(entity, "offset", 0)
-        length = getattr(entity, "length", 0)
+        end_offset = start_offset + getattr(entity, "length", 0)
         start = utf16_index(text, start_offset)
-        end = utf16_index(text, start_offset + length)
+        end = utf16_index(text, end_offset)
         if start is None or end is None:
             continue
         fallback = text[start:end]
-        if fallback in STATUS_CHECK_EMOJIS:
-            replacement = "✅"
-        elif fallback in STATUS_HOURGLASS_EMOJIS:
-            replacement = "⌛"
-        else:
-            continue
-        replacements.append((start_offset, start_offset + length, replacement))
-        status_entities.add(index)
+        custom_id = getattr(entity, "custom_emoji_id", None)
+        keep_pencil_check = (
+            fallback == "✅"
+            and check_custom_emoji_id
+            and custom_id == check_custom_emoji_id
+        )
+        if fallback in STATUS_HOURGLASS_EMOJIS or (
+            fallback in STATUS_CHECK_EMOJIS and not keep_pencil_check
+        ):
+            status_entities.add(index)
+            changed = True
 
-    if not replacements:
-        return text, list(entities or ()), False
+    status_pattern = re.compile("|".join(
+        re.escape(value)
+        for value in sorted(STATUS_CHECK_EMOJIS | STATUS_HOURGLASS_EMOJIS, key=len, reverse=True)
+    ))
+    replacements = []
+    for match in status_pattern.finditer(text):
+        fallback = match.group(0)
+        replacement = "✅" if fallback in STATUS_CHECK_EMOJIS else "⌛"
+        if fallback != replacement:
+            start_offset = len(text[:match.start()].encode("utf-16-le")) // 2
+            end_offset = len(text[:match.end()].encode("utf-16-le")) // 2
+            replacements.append((start_offset, end_offset, replacement))
+            changed = True
 
     replacements.sort(key=lambda item: item[0])
     transformed = text
     for start_offset, end_offset, replacement in reversed(replacements):
-        # These replacements do not overlap, so using original offsets against
-        # the original text is easier and avoids shifting later spans.
         start = utf16_index(text, start_offset)
         end = utf16_index(text, end_offset)
         transformed = transformed[:start] + replacement + transformed[end:]
@@ -2245,8 +2267,11 @@ def normalize_forwarded_status_entities(text, entities):
         return offset + shift
 
     cleaned_entities = []
-    for index, entity in enumerate(entities or ()):
+    for index, entity in enumerate(entities):
         if index in status_entities:
+            continue
+        if not hasattr(entity, "offset") or not hasattr(entity, "length"):
+            cleaned_entities.append(entity)
             continue
         start = getattr(entity, "offset", 0)
         end = start + getattr(entity, "length", 0)
@@ -2261,11 +2286,31 @@ def normalize_forwarded_status_entities(text, entities):
             for field, value in updated.items():
                 setattr(copied_entity, field, value)
             cleaned_entities.append(copied_entity)
-    return transformed, cleaned_entities, True
+
+    if check_custom_emoji_id:
+        existing_checks = {
+            (getattr(entity, "offset", -1), getattr(entity, "length", 0), getattr(entity, "custom_emoji_id", None))
+            for entity in cleaned_entities
+            if getattr(getattr(entity, "type", None), "value", getattr(entity, "type", None)) == "custom_emoji"
+        }
+        for match in re.finditer("✅", transformed):
+            offset = len(transformed[:match.start()].encode("utf-16-le")) // 2
+            length = len("✅".encode("utf-16-le")) // 2
+            marker = (offset, length, check_custom_emoji_id)
+            if marker not in existing_checks:
+                cleaned_entities.append(MessageEntity(
+                    type="custom_emoji",
+                    offset=offset,
+                    length=length,
+                    custom_emoji_id=check_custom_emoji_id,
+                ))
+                changed = True
+
+    return transformed, cleaned_entities, changed
 
 
 async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_regular_fallback=False):
-    """Preserve source formatting while making check/hourglass status marks ordinary emoji."""
+    """Preserve formatting with a PencilEmoji check and an ordinary hourglass."""
     if message.text:
         limit = 4096
         edit = bot.edit_message_text
@@ -2280,7 +2325,9 @@ async def decorate_signal_copy(bot, user_id, copied_message_id, message, allow_r
         return
 
     original = message.text or message.caption or ""
-    original, entities, normalized = normalize_forwarded_status_entities(original, entities)
+    original, entities, normalized = normalize_forwarded_status_entities(
+        original, entities, next_custom_emoji_id("✅")
+    )
     if len(original) > limit:
         return
 
@@ -2353,7 +2400,7 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
                     else getattr(message, "caption_entities", None)
                 ) or []
                 _, _, has_custom_status = normalize_forwarded_status_entities(
-                    source_text, source_entities
+                    source_text, source_entities, next_custom_emoji_id("✅")
                 )
                 if has_custom_status:
                     await decorate_signal_copy(bot, user_id, copied.message_id, message)
