@@ -837,7 +837,7 @@ async def custom_emoji_markup(bot, fallback_emoji):
     if _CUSTOM_EMOJI_PACK is None:
         await setup_custom_emojis(bot)
     custom_id = next_custom_emoji_id(fallback_emoji)
-    if not custom_id:
+    if not custom_id and fallback_emoji != "✅":
         custom_id = next((
             custom_id
             for alias in ANIMATED_EMOJI_ALIASES.get(fallback_emoji, ())
@@ -903,13 +903,11 @@ async def setup_custom_emojis(bot):
     get_sticker_set = getattr(bot, "get_sticker_set", None)
     if not callable(get_sticker_set):
         return
+    pencil_check_id = None
     for pack_name in CUSTOM_EMOJI_PACK_NAMES:
         try:
             sticker_set = await get_sticker_set(pack_name)
             pack_count = 0
-            pencil_check_id = None
-            cute_exact_check_id = None
-            cute_variant_check_id = None
             for sticker_number, sticker in enumerate(sticker_set.stickers, start=1):
                 custom_id = getattr(sticker, "custom_emoji_id", None)
                 emoji = sticker.emoji or ""
@@ -921,45 +919,28 @@ async def setup_custom_emojis(bot):
                     pack_name == "PencilEmoji"
                     and sticker_number == 12
                     and custom_id
-                    and is_animated
                 ):
                     pencil_check_id = custom_id
                 if custom_id and is_animated and is_single_emoji_fallback(emoji):
                     _CUSTOM_EMOJI_PACK.setdefault(emoji, []).append(custom_id)
-                    # Prefer CuteEmoji's exact green-check fallback first;
-                    # other checkmark variants can be neutral/gray in the pack.
-                    if pack_name == "CuteEmoji":
-                        if emoji == "✅":
-                            cute_exact_check_id = cute_exact_check_id or custom_id
-                        elif emoji in ANIMATED_EMOJI_ALIASES["✅"]:
-                            cute_variant_check_id = cute_variant_check_id or custom_id
                     pack_count += 1
-            cute_check_id = cute_exact_check_id or cute_variant_check_id
-            if cute_check_id:
-                check_ids = _CUSTOM_EMOJI_PACK.setdefault("✅", [])
-                _CUSTOM_EMOJI_PACK["✅"] = [
-                    cute_check_id,
-                    *(item for item in check_ids if item != cute_check_id),
-                ]
-            if pack_name == "PencilEmoji":
-                if pencil_check_id:
-                    check_ids = _CUSTOM_EMOJI_PACK.setdefault("✅", [])
-                    _CUSTOM_EMOJI_PACK["✅"] = [
-                        pencil_check_id,
-                        *(item for item in check_ids if item != pencil_check_id),
-                    ]
-                    log.info("Selected animated check from PencilEmoji sticker 12")
-                else:
-                    log.warning("PencilEmoji sticker 12 was not available as an animated custom emoji")
             log.info("Loaded %d custom emojis from %s", pack_count, pack_name)
         except Exception:
             log.exception("Could not load custom emoji pack %s", pack_name)
+    # Do not allow a different pack's gray check to become the fallback.
+    _CUSTOM_EMOJI_PACK["✅"] = [pencil_check_id] if pencil_check_id else []
+    if pencil_check_id:
+        log.info("Selected animated check from PencilEmoji sticker 12")
+    else:
+        log.warning("PencilEmoji sticker 12 has no custom emoji id; using a regular check")
     log.info("Loaded custom emoji mappings for %d distinct symbols", len(_CUSTOM_EMOJI_PACK))
 
 
 def next_custom_emoji_id(emoji):
     """Return an exact sticker match; never substitute an unrelated sticker."""
     sticker_ids = (_CUSTOM_EMOJI_PACK or {}).get(emoji, ())
+    if emoji == "✅":
+        return sticker_ids[0] if sticker_ids else None
     if not sticker_ids:
         sticker_ids = next((
             (_CUSTOM_EMOJI_PACK or {}).get(alias, ())
@@ -1732,12 +1713,14 @@ def signal_result_marker(details):
 def history_signal_marker(details):
     """Show source timers and the final result using ordinary emoji."""
     result = signal_result_kind(details)
-    hourglass = "⌛ " if any(mark in (details or "") for mark in STATUS_HOURGLASS_EMOJIS) else ""
+    details = details or ""
+    hourglass_count = sum(details.count(mark) for mark in STATUS_HOURGLASS_EMOJIS)
+    hourglasses = "⌛ " * hourglass_count
     if result == "win":
-        return f"{hourglass}✅"
+        return f"{hourglasses}✅"
     if result == "loss":
-        return f"{hourglass}❌"
-    return hourglass.rstrip()
+        return f"{hourglasses}❌"
+    return hourglasses.rstrip()
 
 
 def is_signal_record(instrument, details):
