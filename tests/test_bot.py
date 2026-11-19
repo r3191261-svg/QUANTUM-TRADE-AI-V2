@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlencode
@@ -279,6 +280,12 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mini_app_server.validate_telegram_init_data(signed, token)["id"], 991)
         with self.assertRaises(mini_app_server.MiniAppAuthError):
             mini_app_server.validate_telegram_init_data(signed.replace("991", "992"), token)
+
+    async def test_mini_app_daily_stats_use_tashkent_calendar_day(self):
+        now = datetime.now(bot.LOCAL_TZ)
+        self.assertTrue(mini_app_server._is_tashkent_today(now.isoformat()))
+        self.assertFalse(mini_app_server._is_tashkent_today((now - timedelta(days=1)).isoformat()))
+        self.assertFalse(mini_app_server._is_tashkent_today("not-a-timestamp"))
 
     async def test_user_crypto_pair_list_matches_requested_twenty_pairs(self):
         callback = FakeCallback("crypto_pairs")

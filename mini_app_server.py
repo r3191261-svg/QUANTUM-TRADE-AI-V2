@@ -8,7 +8,7 @@ import logging
 import os
 import re
 import time
-from datetime import datetime, time as datetime_time, timezone
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qsl
@@ -125,6 +125,18 @@ def _signal_payload(message_id, body, created_at, updated_at=None):
     }
 
 
+def _is_tashkent_today(value):
+    if not value:
+        return False
+    try:
+        timestamp = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return False
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=quantum_bot.LOCAL_TZ)
+    return timestamp.astimezone(quantum_bot.LOCAL_TZ).date() == datetime.now(quantum_bot.LOCAL_TZ).date()
+
+
 def load_app_profile(user_id):
     with quantum_bot.connect_db() as conn:
         row = conn.execute(
@@ -142,10 +154,7 @@ def load_app_profile(user_id):
             (user_id,),
         ).fetchall()
     history = [_signal_payload(*signal) for signal in signals]
-    local_midnight = datetime.combine(
-        datetime.now(quantum_bot.LOCAL_TZ).date(), datetime_time.min, tzinfo=quantum_bot.LOCAL_TZ
-    ).astimezone(timezone.utc).isoformat()
-    recent = [item for item in history if item["created_at"] and item["created_at"] >= local_midnight]
+    recent = [item for item in history if _is_tashkent_today(item["created_at"])]
     wins = sum(item["status"] == "win" for item in recent)
     losses = sum(item["status"] == "loss" for item in recent)
     return {
