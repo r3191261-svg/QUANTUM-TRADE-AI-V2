@@ -354,6 +354,20 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any("МОИ СИГНАЛЫ" in label for label in labels))
         self.assertFalse(hasattr(bot, "my_signals_handler"))
 
+    async def test_mini_app_main_menu_button_is_red_and_uses_animated_robot_icon(self):
+        old_pack = bot._CUSTOM_EMOJI_PACK
+        try:
+            bot._CUSTOM_EMOJI_PACK = {"🤖": ["robot-id"]}
+            keyboard = bot.build_main_keyboard("https://mini.example.com")
+            button = keyboard.keyboard[0][0]
+            self.assertEqual(button.text, "🤖 ОТКРЫТЬ ПРИЛОЖЕНИЕ")
+            self.assertEqual(button.style, "danger")
+            bot.apply_custom_button_icons(keyboard)
+            self.assertEqual(button.text, "ОТКРЫТЬ ПРИЛОЖЕНИЕ")
+            self.assertEqual(button.icon_custom_emoji_id, "robot-id")
+        finally:
+            bot._CUSTOM_EMOJI_PACK = old_pack
+
 
 if __name__ == "__main__":
     unittest.main()

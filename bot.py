@@ -627,9 +627,13 @@ async def fetch_and_store_news():
 # =========================================================
 
 # User menu.
-main_keyboard = ReplyKeyboardMarkup(
-    keyboard=[
-        *([[KeyboardButton(text="📲 ОТКРЫТЬ MINI APP", web_app=WebAppInfo(url=MINI_APP_URL), style="primary")]] if MINI_APP_URL else []),
+def build_main_keyboard(mini_app_url=MINI_APP_URL):
+    keyboard = [
+        *([[KeyboardButton(
+            text="🤖 ОТКРЫТЬ ПРИЛОЖЕНИЕ",
+            web_app=WebAppInfo(url=mini_app_url),
+            style="danger",
+        )]] if mini_app_url.startswith("https://") else []),
         [KeyboardButton(text="📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", style="primary")],
         [KeyboardButton(text="🗓 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="success")],
         [
@@ -641,9 +645,11 @@ main_keyboard = ReplyKeyboardMarkup(
         [
             KeyboardButton(text="👤 МОЙ ПРОФИЛЬ", style="success"),
         ],
-    ],
-    resize_keyboard=True,
-)
+    ]
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+main_keyboard = build_main_keyboard()
 
 
 def colored_button(text, callback_data, style="primary"):
@@ -854,9 +860,9 @@ async def mini_app_handler(message: Message):
         "<b>QUANTUM TRADE AI · Mini App</b>\nОткройте приложение внутри Telegram.",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(
-                text="📲 Открыть приложение",
+                text="🤖 ОТКРЫТЬ ПРИЛОЖЕНИЕ",
                 web_app=WebAppInfo(url=MINI_APP_URL),
-                style="primary",
+                style="danger",
             )],
         ]),
     )
@@ -1049,6 +1055,7 @@ RU_EN_TRANSLATIONS = {
     "📃 МОЙ ПРОФИЛЬ": "MY PROFILE",
     "👤 МОЙ ПРОФИЛЬ": "MY PROFILE",
     "МОЙ ПРОФИЛЬ": "MY PROFILE",
+    "ОТКРЫТЬ ПРИЛОЖЕНИЕ": "OPEN APP",
     "Мой профиль": "My profile",
     "ЛИЧНЫЙ КАБИНЕТ": "MY ACCOUNT",
     "Имя": "Name",
