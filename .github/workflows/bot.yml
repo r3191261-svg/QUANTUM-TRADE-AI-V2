@@ -5,6 +5,9 @@ on:
     branches:
       - main
   workflow_dispatch:
+  schedule:
+    # Restart before the 350-minute per-run limit, while avoiding :00 peak load.
+    - cron: "17 */5 * * *"
 
 concurrency:
   group: quantum-trade-ai
