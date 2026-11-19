@@ -398,6 +398,14 @@ def init_db():
             )
         """)
         conn.execute("""
+            CREATE TABLE IF NOT EXISTS statistics_messages (
+                user_id BIGINT PRIMARY KEY,
+                chat_id BIGINT NOT NULL,
+                message_id BIGINT NOT NULL,
+                refreshed_at TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
             CREATE TABLE IF NOT EXISTS news (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 source_key TEXT NOT NULL UNIQUE,
@@ -1785,6 +1793,43 @@ async def statistics_handler(message: Message):
     if not await check_user(message):
         return
 
+    statistics_text = await build_statistics_text()
+    user_id = message.from_user.id
+    stored = await asyncio.to_thread(get_statistics_message, user_id)
+    answer_kwargs = {"parse_mode": ParseMode.HTML}
+
+    # Keep one statistics message per user and refresh it in place.
+    if stored:
+        chat_id, message_id, _ = stored
+        try:
+            await message.bot.edit_message_text(
+                statistics_text,
+                chat_id=chat_id,
+                message_id=message_id,
+                **answer_kwargs,
+            )
+            await asyncio.to_thread(mark_statistics_refreshed, user_id, now())
+            return
+        except TelegramBadRequest as error:
+            if "message is not modified" in str(error).lower():
+                await asyncio.to_thread(mark_statistics_refreshed, user_id, now())
+                return
+            log.info("Stored statistics message for %s is no longer editable: %s", user_id, error)
+        except TelegramAPIError:
+            log.exception("Could not edit stored statistics message for %s", user_id)
+
+    sent = await message.answer(statistics_text, **answer_kwargs)
+    await asyncio.to_thread(
+        save_statistics_message,
+        user_id,
+        sent.chat.id,
+        sent.message_id,
+        now(),
+    )
+
+
+async def build_statistics_text():
+    """Build stats from signal posts published in the rolling last 24 hours."""
     since = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
     source_rows, manual_signals = await asyncio.to_thread(load_recent_signal_rows, since)
     recent_signals = [text for (text,) in source_rows if is_signal_record("", text)]
@@ -1808,8 +1853,74 @@ async def statistics_handler(message: Message):
         f"✅ WIN: {wins}\n"
         f"{custom_emoji_entity('❌', next_custom_emoji_id('❌'))} LOSS: {losses}"
     )
-    answer_kwargs = {"parse_mode": ParseMode.HTML} if getattr(message, "bot", None) else {}
-    await message.answer(statistics_text, **answer_kwargs)
+    return statistics_text
+
+
+def get_statistics_message(user_id):
+    with connect_db() as conn:
+        return conn.execute(
+            "SELECT chat_id, message_id, refreshed_at FROM statistics_messages WHERE user_id=?",
+            (user_id,),
+        ).fetchone()
+
+
+def save_statistics_message(user_id, chat_id, message_id, refreshed_at):
+    with connect_db() as conn:
+        conn.execute(
+            "INSERT INTO statistics_messages (user_id, chat_id, message_id, refreshed_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET "
+            "chat_id=excluded.chat_id, message_id=excluded.message_id, "
+            "refreshed_at=excluded.refreshed_at",
+            (user_id, chat_id, message_id, refreshed_at),
+        )
+
+
+def mark_statistics_refreshed(user_id, refreshed_at):
+    with connect_db() as conn:
+        conn.execute(
+            "UPDATE statistics_messages SET refreshed_at=? WHERE user_id=?",
+            (refreshed_at, user_id),
+        )
+
+
+def due_statistics_messages(cutoff):
+    with connect_db() as conn:
+        return conn.execute(
+            "SELECT user_id, chat_id, message_id FROM statistics_messages "
+            "WHERE refreshed_at <= ? ORDER BY refreshed_at LIMIT 100",
+            (cutoff,),
+        ).fetchall()
+
+
+async def statistics_refresh_worker(bot):
+    """Edit subscribed users' saved statistics message once every 24 hours."""
+    while True:
+        await asyncio.sleep(60)
+        try:
+            cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+            due_rows = await asyncio.to_thread(due_statistics_messages, cutoff)
+            if not due_rows:
+                continue
+            statistics_text = await build_statistics_text()
+            for user_id, chat_id, message_id in due_rows:
+                try:
+                    await bot.edit_message_text(
+                        statistics_text,
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        parse_mode=ParseMode.HTML,
+                    )
+                    log.info("Refreshed 24-hour statistics for user %s", user_id)
+                except TelegramBadRequest as error:
+                    if "message is not modified" not in str(error).lower():
+                        log.info("Could not refresh statistics for user %s: %s", user_id, error)
+                except TelegramAPIError:
+                    log.exception("Could not refresh statistics for user %s", user_id)
+                finally:
+                    # Avoid a rapid retry loop if the user deleted or blocked the bot.
+                    await asyncio.to_thread(mark_statistics_refreshed, user_id, now())
+        except Exception:
+            log.exception("Statistics refresh worker failed")
 
 
 def load_recent_signal_rows(since):
@@ -1817,8 +1928,8 @@ def load_recent_signal_rows(since):
     with connect_db() as conn:
         source_rows = conn.execute(
             "SELECT text FROM source_posts "
-            "WHERE created_at >= ? OR COALESCE(updated_at, created_at) >= ?",
-            (since, since),
+            "WHERE created_at >= ?",
+            (since,),
         ).fetchall()
         manual_signals = conn.execute(
             "SELECT instrument, details FROM signals "
@@ -3362,6 +3473,7 @@ async def main():
                 close_bot_session=False,
             ),
             health_refresh_worker(),
+            statistics_refresh_worker(user_bot),
         ]
         if NEWS_REPUBLISH_ALLOWED:
             pollers.append(news_refresh_worker())
