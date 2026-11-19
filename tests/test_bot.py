@@ -358,6 +358,10 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         old_pack = bot._CUSTOM_EMOJI_PACK
         try:
             bot._CUSTOM_EMOJI_PACK = {"🤖": ["robot-id"]}
+            fallback_button = bot.build_main_keyboard("").keyboard[0][0]
+            self.assertEqual(fallback_button.text, "🤖 ОТКРЫТЬ ПРИЛОЖЕНИЕ")
+            self.assertEqual(fallback_button.style, "danger")
+            self.assertIsNone(fallback_button.web_app)
             keyboard = bot.build_main_keyboard("https://mini.example.com")
             button = keyboard.keyboard[0][0]
             self.assertEqual(button.text, "🤖 ОТКРЫТЬ ПРИЛОЖЕНИЕ")

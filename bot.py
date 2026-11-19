@@ -629,11 +629,11 @@ async def fetch_and_store_news():
 # User menu.
 def build_main_keyboard(mini_app_url=MINI_APP_URL):
     keyboard = [
-        *([[KeyboardButton(
+        [KeyboardButton(
             text="🤖 ОТКРЫТЬ ПРИЛОЖЕНИЕ",
-            web_app=WebAppInfo(url=mini_app_url),
+            web_app=WebAppInfo(url=mini_app_url) if mini_app_url.startswith("https://") else None,
             style="danger",
-        )]] if mini_app_url.startswith("https://") else []),
+        )],
         [KeyboardButton(text="📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", style="primary")],
         [KeyboardButton(text="🗓 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="success")],
         [
@@ -850,6 +850,7 @@ async def start_handler(message: Message):
 
 
 @user_dp.message(Command("app"))
+@user_dp.message(F.text.in_({"🤖 ОТКРЫТЬ ПРИЛОЖЕНИЕ", "ОТКРЫТЬ ПРИЛОЖЕНИЕ", "🤖 OPEN APP", "OPEN APP"}))
 async def mini_app_handler(message: Message):
     if not await check_user(message):
         return
