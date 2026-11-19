@@ -1796,7 +1796,7 @@ async def statistics_handler(message: Message):
     statistics_text = await build_statistics_text()
     user_id = message.from_user.id
     stored = await asyncio.to_thread(get_statistics_message, user_id)
-    answer_kwargs = {"parse_mode": ParseMode.HTML}
+    answer_kwargs = {"parse_mode": ParseMode.HTML} if getattr(message, "bot", None) else {}
 
     # Keep one statistics message per user and refresh it in place.
     if stored:
@@ -1819,13 +1819,14 @@ async def statistics_handler(message: Message):
             log.exception("Could not edit stored statistics message for %s", user_id)
 
     sent = await message.answer(statistics_text, **answer_kwargs)
-    await asyncio.to_thread(
-        save_statistics_message,
-        user_id,
-        sent.chat.id,
-        sent.message_id,
-        now(),
-    )
+    if sent and getattr(sent, "chat", None) and getattr(sent, "message_id", None):
+        await asyncio.to_thread(
+            save_statistics_message,
+            user_id,
+            sent.chat.id,
+            sent.message_id,
+            now(),
+        )
 
 
 async def build_statistics_text():
