@@ -1,12 +1,18 @@
 import sqlite3
 import tempfile
 import unittest
+import hashlib
+import hmac
+import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlencode
 
 from aiohttp import web
 
 import bot
+import mini_app_server
 
 
 class FakeTelegramBot:
@@ -228,7 +234,7 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(choices), 3)
         intrade, binodex, back = (row[0] for row in choices)
         self.assertEqual((intrade.text, intrade.url, intrade.style),
-                         ("INTRADE BAR", "https://clck.ru/3X2xAM", "success"))
+                         ("INTRADE BAR", "https://go.intrade.bar/n4FmpAFBYfvE", "success"))
         self.assertEqual((binodex.text, binodex.url, binodex.style),
                          ("BinoDex", "https://bdclick.app/smart/DLreJY", "success"))
         self.assertEqual((back.text, back.callback_data, back.style),
@@ -258,7 +264,21 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
     async def test_binary_menu_hides_crypto_list_and_exposes_binary_signals(self):
         labels = [row[0].text for row in bot.binary_menu_keyboard().inline_keyboard]
         self.assertNotIn("₿ СПИСОК КРИПТОПАР", labels)
-        self.assertIn("📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", labels)
+        self.assertEqual(labels, ["💱 Все валютные пары", "🕘 За последние 10 минут"])
+
+    async def test_mini_app_init_data_requires_valid_telegram_signature(self):
+        token = "123456:unit-test-token"
+        fields = {
+            "auth_date": str(int(time.time())),
+            "user": json.dumps({"id": 991, "first_name": "Test"}, separators=(",", ":")),
+        }
+        check_string = "\n".join(f"{key}={fields[key]}" for key in sorted(fields))
+        secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
+        fields["hash"] = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
+        signed = urlencode(fields)
+        self.assertEqual(mini_app_server.validate_telegram_init_data(signed, token)["id"], 991)
+        with self.assertRaises(mini_app_server.MiniAppAuthError):
+            mini_app_server.validate_telegram_init_data(signed.replace("991", "992"), token)
 
     async def test_user_crypto_pair_list_matches_requested_twenty_pairs(self):
         callback = FakeCallback("crypto_pairs")

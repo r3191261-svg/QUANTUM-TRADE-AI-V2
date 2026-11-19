@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <meta name="theme-color" content="#06111f">
+  <meta name="color-scheme" content="dark">
+  <title>QUANTUM TRADE AI</title>
+  <link rel="icon" href="/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#home" aria-label="QUANTUM TRADE AI — главная">
+        <img src="/logo.svg" alt="" class="brand-mark">
+        <span class="brand-name">QUANTUM TRADE <b>AI</b></span>
+      </a>
+      <button class="icon-button" id="refresh-button" aria-label="Обновить данные" title="Обновить">↻</button>
+    </header>
+
+    <main id="view" aria-live="polite">
+      <div class="loading"><span class="loader"></span><span>Подключение к Telegram…</span></div>
+    </main>
+
+    <nav class="bottom-nav" aria-label="Основная навигация">
+      <button class="nav-item active" data-screen="home"><span class="nav-icon">⌂</span><span>Главная</span></button>
+      <button class="nav-item" data-screen="charts"><span class="nav-icon">▥</span><span>Графики</span></button>
+      <button class="nav-item" data-screen="signals"><span class="nav-icon">⌁</span><span>Сигналы</span></button>
+      <button class="nav-item" data-screen="news"><span class="nav-icon">▤</span><span>Новости</span></button>
+      <button class="nav-item" data-screen="profile"><span class="nav-icon">♙</span><span>Профиль</span></button>
+    </nav>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>

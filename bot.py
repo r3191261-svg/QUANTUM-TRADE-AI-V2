@@ -31,6 +31,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
     BotCommand,
+    WebAppInfo,
+    MenuButtonWebApp,
     FSInputFile,
     ErrorEvent,
 )
@@ -101,8 +103,9 @@ NEWS_LIMIT = 100
 NEWS_REPUBLISH_ALLOWED = os.getenv("NEWS_REPUBLISH_ALLOWED", "false").strip().lower() == "true"
 AUTOTRADE_DRAFT = "Здравствуйте! 🤝 Хочу подключить автоторговлю!"
 SUPPORT_URL = "https://t.me/copy_broker_BO_bot?text=" + quote(AUTOTRADE_DRAFT)
-REGISTRATION_URL = "https://clck.ru/3X2xAM"
+REGISTRATION_URL = "https://go.intrade.bar/n4FmpAFBYfvE"
 BINODEX_REGISTRATION_URL = "https://bdclick.app/smart/DLreJY"
+MINI_APP_URL = os.getenv("MINI_APP_URL", "").strip()
 LOCAL_TZ = timezone(timedelta(hours=5), "Asia/Tashkent")
 
 # ISO 4217 currency codes plus commonly quoted crypto tickers. Signals are
@@ -626,6 +629,7 @@ async def fetch_and_store_news():
 # User menu.
 main_keyboard = ReplyKeyboardMarkup(
     keyboard=[
+        *([[KeyboardButton(text="📲 ОТКРЫТЬ MINI APP", web_app=WebAppInfo(url=MINI_APP_URL), style="primary")]] if MINI_APP_URL else []),
         [KeyboardButton(text="📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", style="primary")],
         [KeyboardButton(text="🗓 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="success")],
         [
@@ -837,6 +841,25 @@ async def start_handler(message: Message):
     except TelegramAPIError:
         log.exception("Could not send welcome video; using text greeting")
         await message.answer(welcome_text, reply_markup=keyboard)
+
+
+@user_dp.message(Command("app"))
+async def mini_app_handler(message: Message):
+    if not await check_user(message):
+        return
+    if not MINI_APP_URL.startswith("https://"):
+        await message.answer("Mini App ещё не опубликован: требуется задать HTTPS-переменную MINI_APP_URL.")
+        return
+    await message.answer(
+        "<b>QUANTUM TRADE AI · Mini App</b>\nОткройте приложение внутри Telegram.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(
+                text="📲 Открыть приложение",
+                web_app=WebAppInfo(url=MINI_APP_URL),
+                style="primary",
+            )],
+        ]),
+    )
 
 
 async def custom_emoji_markup(bot, fallback_emoji):
@@ -1380,7 +1403,8 @@ async def options_handler(message: Message):
 
 def binary_menu_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[
-        [colored_button("📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", "binary_recent_10", "success")],
+        [colored_button("💱 Все валютные пары", "binary_all_pairs", "primary")],
+        [colored_button("🕘 За последние 10 минут", "binary_recent_10", "success")],
     ])
 
 
@@ -3392,6 +3416,7 @@ async def main():
 
         user_commands = [
             BotCommand(command="start", description="Открыть главное меню"),
+            BotCommand(command="app", description="Открыть Mini App"),
             BotCommand(command="signals", description="Сигналы для бинарных опционов"),
             BotCommand(command="calendar", description="Экономический календарь"),
             BotCommand(command="stats", description="Результаты за последние 24 часа"),
@@ -3421,6 +3446,13 @@ async def main():
         ]
         await user_bot.set_my_commands(user_commands)
         await admin_bot.set_my_commands(admin_commands)
+        if MINI_APP_URL.startswith("https://"):
+            await user_bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="QUANTUM APP",
+                    web_app=WebAppInfo(url=MINI_APP_URL),
+                )
+            )
 
         log.info("Пользовательский бот: @%s", user_info.username)
         log.info("Административный бот: @%s", admin_info.username)

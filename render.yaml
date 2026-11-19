@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: quantum-trade-miniapp
+    runtime: python
+    plan: free
+    buildCommand: python -m pip install -r requirements.txt
+    startCommand: python mini_app_server.py
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: TOKEN_USER
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: NEWS_REPUBLISH_ALLOWED
+        value: "false"
