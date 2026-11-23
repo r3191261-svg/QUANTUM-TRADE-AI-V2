@@ -636,10 +636,7 @@ def build_main_keyboard(mini_app_url=MINI_APP_URL):
         )],
         [KeyboardButton(text="📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", style="primary")],
         [KeyboardButton(text="🗓 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="success")],
-        [
-            KeyboardButton(text="📊 СТАТИСТИКА", style="danger"),
-            KeyboardButton(text="🕘 ИСТОРИЯ СИГНАЛОВ", style="danger"),
-        ],
+        [KeyboardButton(text="🕘 ИСТОРИЯ СИГНАЛОВ", style="danger")],
         [KeyboardButton(text="🤖 АВТОМАТИЧЕСКИЙ БОТ", style="primary")],
         [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="success")],
         [
@@ -1751,7 +1748,7 @@ def signal_result_marker(details):
 
 
 def history_signal_marker(details):
-    """Show source timers and the final result using ordinary emoji."""
+    """Show source timers and mark losses with the requested plain minus."""
     result = signal_result_kind(details)
     details = details or ""
     hourglass_count = sum(details.count(mark) for mark in STATUS_HOURGLASS_EMOJIS)
@@ -1759,7 +1756,7 @@ def history_signal_marker(details):
     if result == "win":
         return f"{hourglasses}✅"
     if result == "loss":
-        return f"{hourglasses}❌"
+        return f"{hourglasses}➖"
     return hourglasses.rstrip()
 
 
