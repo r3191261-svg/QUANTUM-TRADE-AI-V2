@@ -629,14 +629,8 @@ async def fetch_and_store_news():
 # User menu.
 def build_main_keyboard(mini_app_url=MINI_APP_URL):
     keyboard = [
-        [KeyboardButton(
-            text="🤖 ОТКРЫТЬ ПРИЛОЖЕНИЕ",
-            web_app=WebAppInfo(url=mini_app_url) if mini_app_url.startswith("https://") else None,
-            style="danger",
-        )],
         [KeyboardButton(text="📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", style="primary")],
         [KeyboardButton(text="🗓 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="success")],
-        [KeyboardButton(text="🕘 ИСТОРИЯ СИГНАЛОВ", style="danger")],
         [KeyboardButton(text="🤖 АВТОМАТИЧЕСКИЙ БОТ", style="primary")],
         [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="success")],
         [
