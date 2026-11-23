@@ -348,29 +348,23 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         finally:
             bot._CUSTOM_EMOJI_PACK = old_pack
 
-    async def test_main_keyboard_has_single_signal_history_entry(self):
+    async def test_main_keyboard_hides_removed_statistics_history_and_app_buttons(self):
         labels = [button.text for row in bot.main_keyboard.keyboard for button in row]
-        self.assertIn("🕘 ИСТОРИЯ СИГНАЛОВ", labels)
+        self.assertNotIn("📊 СТАТИСТИКА", labels)
+        self.assertNotIn("🕘 ИСТОРИЯ СИГНАЛОВ", labels)
+        self.assertFalse(any("ОТКРЫТЬ ПРИЛОЖЕНИЕ" in label for label in labels))
         self.assertFalse(any("МОИ СИГНАЛЫ" in label for label in labels))
         self.assertFalse(hasattr(bot, "my_signals_handler"))
 
-    async def test_mini_app_main_menu_button_is_red_and_uses_animated_robot_icon(self):
-        old_pack = bot._CUSTOM_EMOJI_PACK
-        try:
-            bot._CUSTOM_EMOJI_PACK = {"🤖": ["robot-id"]}
-            fallback_button = bot.build_main_keyboard("").keyboard[0][0]
-            self.assertEqual(fallback_button.text, "🤖 ОТКРЫТЬ ПРИЛОЖЕНИЕ")
-            self.assertEqual(fallback_button.style, "danger")
-            self.assertIsNone(fallback_button.web_app)
-            keyboard = bot.build_main_keyboard("https://mini.example.com")
-            button = keyboard.keyboard[0][0]
-            self.assertEqual(button.text, "🤖 ОТКРЫТЬ ПРИЛОЖЕНИЕ")
-            self.assertEqual(button.style, "danger")
-            bot.apply_custom_button_icons(keyboard)
-            self.assertEqual(button.text, "ОТКРЫТЬ ПРИЛОЖЕНИЕ")
-            self.assertEqual(button.icon_custom_emoji_id, "robot-id")
-        finally:
-            bot._CUSTOM_EMOJI_PACK = old_pack
+    async def test_removed_main_menu_buttons_stay_hidden_with_mini_app_url(self):
+        labels = [
+            button.text
+            for row in bot.build_main_keyboard("https://mini.example.com").keyboard
+            for button in row
+        ]
+        self.assertFalse(any("ОТКРЫТЬ ПРИЛОЖЕНИЕ" in label for label in labels))
+        self.assertNotIn("📊 СТАТИСТИКА", labels)
+        self.assertNotIn("🕘 ИСТОРИЯ СИГНАЛОВ", labels)
 
 
 if __name__ == "__main__":
