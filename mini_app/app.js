@@ -62,7 +62,7 @@
   function renderHome() {
     const profile = state.profile || {};
     const latest = profile.signals?.[0];
-    return `<section class="home-welcome fade-in"><img class="home-welcome-image" src="/images/welcome-dashboard.png" alt="Добро пожаловать в QUANTUM TRADE AI" fetchpriority="high"><div class="home-welcome-actions"><button class="button primary" data-go="signals">▥ Сигналы</button><button class="button ghost" data-go="signals">◷ История сигналов</button><button class="button ghost" data-go="profile">♙ Мой профиль</button><button class="button ghost" data-go="profile">♧ Уведомления</button></div></section>
+    return `<section class="home-welcome fade-in"><img class="home-welcome-image" src="/images/welcome-dashboard.png" alt="Добро пожаловать в QUANTUM TRADE AI" fetchpriority="high"><div class="home-welcome-actions"><button class="button primary" data-go="signals">▥ Сигналы</button><button class="button ghost" data-go="history">◷ История сигналов</button><button class="button ghost" data-go="profile">🤖 Авто-бот</button><button class="button ghost" data-go="profile">♧ Уведомления</button><button class="button ghost" data-go="profile">♙ Мой профиль</button></div></section>
       <section class="hero fade-in"><div class="eyebrow">QUANTUM TRADE AI · Центр рынка</div><h1>Торговые данные<br>в одном приложении</h1><p>Сигналы из подключённого канала, история их результатов и графики рынка.</p><div class="hero-actions"><button class="button primary" data-go="signals">Открыть сигналы</button><button class="button ghost" data-go="charts">График</button></div></section>
       <div class="section-head"><h2>Сигналы за сегодня</h2><span class="sub">по публикациям, доставленным вам</span></div>
       <div class="stats-grid">${stat(profile.signals_today ?? 0,"Всего","blue")}${stat(profile.wins_today ?? 0,"Профит","green")}${stat(profile.losses_today ?? 0,"Лосс","red")}</div>
@@ -161,7 +161,7 @@
   document.getElementById("refresh-button").addEventListener("click", async () => { await refresh(); toast("Данные обновлены"); });
   document.addEventListener("click", event => {
     const go = event.target.closest("[data-go]");
-    if (go) { state.screen = go.dataset.go; render(); window.scrollTo({top:0,behavior:"smooth"}); return; }
+    if (go) { state.screen = go.dataset.go === "history" ? "signals" : go.dataset.go; if (go.dataset.go === "history") state.signalFilter = "history"; render(); window.scrollTo({top:0,behavior:"smooth"}); return; }
     const filter = event.target.closest("[data-filter]");
     if (filter) { state.signalFilter = filter.dataset.filter; render(); return; }
     const market = event.target.closest("[data-market]");
