@@ -131,22 +131,31 @@ DEFAULT_CUSTOM_EMOJI_PACKS = (
 CUSTOM_EMOJI_PACK_NAMES = tuple(dict.fromkeys([
     *(
         name.strip()
-        for name in os.getenv("CUSTOM_EMOJI_PACK_NAMES", DEFAULT_CUSTOM_EMOJI_PACKS).split(",")
+        for name in DEFAULT_CUSTOM_EMOJI_PACKS.split(",")
         if name.strip()
     ),
-    "CuteEmoji",
-    "PencilEmoji",
+    *(
+        name.strip()
+        for name in os.getenv("CUSTOM_EMOJI_PACK_NAMES", "").split(",")
+        if name.strip()
+    ),
 ]))
 _CUSTOM_EMOJI_PACK = None
 ANIMATED_EMOJI_TARGETS = (
-    "🗓", "📅", "🕘", "🕒", "🤖", "➡️", "🇷🇺", "🇬🇧", "✏️", "🗞", "🛜", "📈", "📊",
-    "🔔", "✅", "❌", "🔕", "⚙️", "🛡", "📝", "📨", "📢", "🚫", "👤",
+    "🗓", "📅", "🕘", "🕒", "⏰", "🤖", "➡️", "⬅️", "↩️", "↗️", "🇷🇺", "🇬🇧",
+    "✏️", "🗞", "📰", "🛜", "📈", "📊", "💱", "🔔", "✅", "❌", "🔕", "⚙️",
+    "🛡", "📝", "📨", "📬", "📢", "🚫", "👤", "⚠️", "ℹ️",
 )
 BUTTON_EMOJI_TARGETS = tuple(dict.fromkeys((*ANIMATED_EMOJI_TARGETS, "👤")))
 ANIMATED_EMOJI_ALIASES = {
     "🤖": ("👾",),
     "🕒": ("🕘", "🕐", "⏰", "⌚"),
     "🕘": ("🕒", "🕐", "⏰", "⌚"),
+    "🗞": ("📰",),
+    "📨": ("📰",),
+    "📬": ("📨", "📰"),
+    "↗️": ("➡️",),
+    "ℹ️": ("💡",),
     "✅": ("☑️", "✔️", "✔", "✓", "🗸"),
     "❌": ("✖️", "✖", "❎"),
     "⏳": ("⌛", "🕒", "⏰"),
@@ -769,8 +778,8 @@ def signal_action_keyboard():
 def broker_choice_keyboard(back_callback="broker_back_autotrade"):
     broker_style = "success" if back_callback == "broker_back_signal" else "primary"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="INTRADE BAR", url=REGISTRATION_URL, style=broker_style)],
-        [InlineKeyboardButton(text="BinoDex", url=BINODEX_REGISTRATION_URL, style=broker_style)],
+        [InlineKeyboardButton(text="➡️ INTRADE BAR", url=REGISTRATION_URL, style=broker_style)],
+        [InlineKeyboardButton(text="➡️ BinoDex", url=BINODEX_REGISTRATION_URL, style=broker_style)],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback, style="primary")],
     ])
 
@@ -1421,7 +1430,7 @@ def chat_language(chat_id):
 
 
 def apply_custom_button_icons(reply_markup, language="ru"):
-    """Use animated icons only for buttons with an exact match in the selected packs."""
+    """Apply an animated pack icon, using a related emoji when the exact one is unavailable."""
     if not reply_markup:
         return
     keyboard = getattr(reply_markup, "inline_keyboard", None) or getattr(reply_markup, "keyboard", None)
@@ -1433,9 +1442,16 @@ def apply_custom_button_icons(reply_markup, language="ru"):
             if language == "en":
                 label = translate_to_english(label)
             for emoji in sorted(BUTTON_EMOJI_TARGETS, key=len, reverse=True):
-                if emoji and emoji in label and next_custom_emoji_id(emoji):
+                if emoji and emoji in label:
+                    custom_id = next_custom_emoji_id(emoji) or next((
+                        next_custom_emoji_id(alias)
+                        for alias in ANIMATED_EMOJI_ALIASES.get(emoji, ())
+                        if next_custom_emoji_id(alias)
+                    ), None)
+                    if not custom_id:
+                        continue
                     try:
-                        button.icon_custom_emoji_id = next_custom_emoji_id(emoji)
+                        button.icon_custom_emoji_id = custom_id
                         button.text = label.replace(emoji, "", 1).lstrip()
                     except (AttributeError, TypeError, ValueError):
                         pass

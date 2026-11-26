@@ -235,9 +235,9 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(choices), 3)
         intrade, binodex, back = (row[0] for row in choices)
         self.assertEqual((intrade.text, intrade.url, intrade.style),
-                         ("INTRADE BAR", "https://go.intrade.bar/n4FmpAFBYfvE", "primary"))
+                         ("➡️ INTRADE BAR", "https://go.intrade.bar/n4FmpAFBYfvE", "primary"))
         self.assertEqual((binodex.text, binodex.url, binodex.style),
-                         ("BinoDex", "https://bdclick.app/smart/DLreJY", "primary"))
+                         ("➡️ BinoDex", "https://bdclick.app/smart/DLreJY", "primary"))
         self.assertEqual((back.text, back.callback_data, back.style),
                          ("⬅️ Назад", "broker_back_autotrade", "primary"))
 
