@@ -635,11 +635,11 @@ def build_main_keyboard(mini_app_url=MINI_APP_URL):
     keyboard = [
         [KeyboardButton(text="📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", style="primary")],
         [KeyboardButton(text="🗓 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="danger")],
-        [KeyboardButton(text="🕘 ИСТОРИЯ СИГНАЛОВ", style="danger")],
+        [KeyboardButton(text="🕘 ИСТОРИЯ СИГНАЛОВ", style="success")],
         [KeyboardButton(text="🤖 АВТОМАТИЧЕСКИЙ БОТ", style="primary")],
-        [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="primary")],
+        [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="success")],
         [
-            KeyboardButton(text="👤 МОЙ ПРОФИЛЬ", style="primary"),
+            KeyboardButton(text="👤 МОЙ ПРОФИЛЬ", style="success"),
         ],
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
