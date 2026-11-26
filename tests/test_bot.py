@@ -351,7 +351,7 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
     async def test_main_keyboard_hides_removed_statistics_history_and_app_buttons(self):
         labels = [button.text for row in bot.main_keyboard.keyboard for button in row]
         self.assertNotIn("📊 СТАТИСТИКА", labels)
-        self.assertNotIn("🕘 ИСТОРИЯ СИГНАЛОВ", labels)
+        self.assertIn("🕘 ИСТОРИЯ СИГНАЛОВ", labels)
         self.assertFalse(any("ОТКРЫТЬ ПРИЛОЖЕНИЕ" in label for label in labels))
         self.assertFalse(any("МОИ СИГНАЛЫ" in label for label in labels))
         self.assertFalse(hasattr(bot, "my_signals_handler"))
@@ -364,7 +364,7 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertFalse(any("ОТКРЫТЬ ПРИЛОЖЕНИЕ" in label for label in labels))
         self.assertNotIn("📊 СТАТИСТИКА", labels)
-        self.assertNotIn("🕘 ИСТОРИЯ СИГНАЛОВ", labels)
+        self.assertIn("🕘 ИСТОРИЯ СИГНАЛОВ", labels)
 
 
 if __name__ == "__main__":

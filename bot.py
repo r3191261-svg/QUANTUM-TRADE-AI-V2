@@ -631,6 +631,7 @@ def build_main_keyboard(mini_app_url=MINI_APP_URL):
     keyboard = [
         [KeyboardButton(text="📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", style="primary")],
         [KeyboardButton(text="🗓 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="success")],
+        [KeyboardButton(text="🕘 ИСТОРИЯ СИГНАЛОВ", style="danger")],
         [KeyboardButton(text="🤖 АВТОМАТИЧЕСКИЙ БОТ", style="primary")],
         [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="success")],
         [
