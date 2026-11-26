@@ -668,9 +668,10 @@ def signal_action_keyboard():
 
 
 def broker_choice_keyboard(back_callback="broker_back_autotrade"):
+    broker_style = "success" if back_callback == "broker_back_signal" else "primary"
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="INTRADE BAR", url=REGISTRATION_URL, style="primary")],
-        [InlineKeyboardButton(text="BinoDex", url=BINODEX_REGISTRATION_URL, style="primary")],
+        [InlineKeyboardButton(text="INTRADE BAR", url=REGISTRATION_URL, style=broker_style)],
+        [InlineKeyboardButton(text="BinoDex", url=BINODEX_REGISTRATION_URL, style=broker_style)],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback, style="primary")],
     ])
 

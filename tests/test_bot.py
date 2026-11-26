@@ -216,8 +216,8 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("14659", text)
         self.assertNotIn("Статус подключения", text)
         registration, support = markup.inline_keyboard[0][0], markup.inline_keyboard[1][0]
-        self.assertEqual(registration.style, "success")
-        self.assertEqual(support.style, "success")
+        self.assertEqual(registration.style, "primary")
+        self.assertEqual(support.style, "primary")
         self.assertEqual(registration.callback_data, "choose_broker")
         self.assertIsNone(support.callback_data)
         self.assertEqual(registration.text, "➡️ Регистрация у брокера")
@@ -228,16 +228,16 @@ class BotFeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Здравствуйте! 🤝 Хочу подключить автоторговлю!", text)
         self.assertNotIn("отправьте администратору сообщение", text.lower())
 
-    async def test_registration_button_opens_two_green_broker_links(self):
+    async def test_registration_button_opens_two_blue_broker_links(self):
         callback = FakeCallback("choose_broker", user_id=101)
         await bot.broker_choice_handler(callback)
         choices = callback.message.reply_markup.inline_keyboard
         self.assertEqual(len(choices), 3)
         intrade, binodex, back = (row[0] for row in choices)
         self.assertEqual((intrade.text, intrade.url, intrade.style),
-                         ("INTRADE BAR", "https://go.intrade.bar/n4FmpAFBYfvE", "success"))
+                         ("INTRADE BAR", "https://go.intrade.bar/n4FmpAFBYfvE", "primary"))
         self.assertEqual((binodex.text, binodex.url, binodex.style),
-                         ("BinoDex", "https://bdclick.app/smart/DLreJY", "success"))
+                         ("BinoDex", "https://bdclick.app/smart/DLreJY", "primary"))
         self.assertEqual((back.text, back.callback_data, back.style),
                          ("⬅️ Назад", "broker_back_autotrade", "primary"))
 
