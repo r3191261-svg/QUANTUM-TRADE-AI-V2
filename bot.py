@@ -15,7 +15,7 @@ from contextlib import contextmanager
 import aiohttp
 import feedparser
 
-from aiogram import Bot, Dispatcher, F
+from aiogram import BaseMiddleware, Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
@@ -122,6 +122,9 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 INTRO_GIF_PATH = os.getenv("INTRO_GIF_PATH", "assets/quantum_trade_ai_intro.gif")
 INTRO_GIF_FILE_ID = os.getenv("INTRO_GIF_FILE_ID", "").strip()
 INTRO_VIDEO_PATH = os.getenv("INTRO_VIDEO_PATH", "assets/quantum_trade_ai_promo.mp4")
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+SECTION_IMAGE_FILE_IDS = {}
+USER_LANGUAGE_CACHE = {}
 DEFAULT_CUSTOM_EMOJI_PACKS = (
     "svoy_v_alfe,AR_PREMIUM,TrendsEmoji,zholto_rozovij,NewsEmoji,FlagsByKoylli,tgiosicons,CuteEmoji,PencilEmoji"
 )
@@ -159,6 +162,32 @@ log = logging.getLogger("QUANTUM_TRADE_AI")
 
 user_dp = Dispatcher(storage=MemoryStorage())
 admin_dp = Dispatcher()
+
+
+async def send_typing_action(bot, chat_id):
+    try:
+        await bot.send_chat_action(chat_id=chat_id, action="typing")
+    except Exception:
+        log.debug("Could not show typing action for chat %s", chat_id)
+
+
+class TelegramLoadingMiddleware(BaseMiddleware):
+    """Show Telegram's native typing animation without adding status messages."""
+
+    async def __call__(self, handler, event, data):
+        chat_id = None
+        if isinstance(event, Message):
+            chat_id = event.chat.id
+        elif isinstance(event, CallbackQuery) and isinstance(event.message, Message):
+            chat_id = event.message.chat.id
+        if chat_id is not None:
+            asyncio.create_task(send_typing_action(data["bot"], chat_id))
+        return await handler(event, data)
+
+
+for dispatcher in (user_dp, admin_dp):
+    dispatcher.message.outer_middleware(TelegramLoadingMiddleware())
+    dispatcher.callback_query.outer_middleware(TelegramLoadingMiddleware())
 
 
 class SupportRequest(StatesGroup):
@@ -420,6 +449,12 @@ def init_db():
                 fetched_at TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS telegram_media (
+                name TEXT PRIMARY KEY,
+                file_id TEXT NOT NULL
+            )
+        """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_source_posts_created_at ON source_posts(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_news_published_at ON news(published_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_created_at ON signals(created_at)")
@@ -490,7 +525,10 @@ def get_user(user_id):
 
 async def get_user_async(user_id):
     """Read user state without blocking other bot updates on database I/O."""
-    return await asyncio.to_thread(get_user, user_id)
+    user = await asyncio.to_thread(get_user, user_id)
+    if user:
+        USER_LANGUAGE_CACHE[user_id] = "en" if user[5] == "en" else "ru"
+    return user
 
 
 def set_notification_preferences(user_id, enabled):
@@ -507,6 +545,7 @@ def set_user_language(user_id, language):
             "UPDATE users SET language=? WHERE user_id=?",
             (language, user_id),
         )
+    USER_LANGUAGE_CACHE[user_id] = "en" if language == "en" else "ru"
 
 
 def get_status(user_id):
@@ -648,6 +687,66 @@ def build_main_keyboard(mini_app_url=MINI_APP_URL):
 main_keyboard = build_main_keyboard()
 
 
+async def answer_section_card(message, image_name, caption, reply_markup=None):
+    """Send a bundled section banner when available, with a text-only fallback."""
+    image_path = ASSETS_DIR / image_name
+    send_photo = getattr(message, "answer_photo", None)
+    if image_path.is_file() and callable(send_photo):
+        file_id = SECTION_IMAGE_FILE_IDS.get(image_name)
+        if file_id is None:
+            file_id = await asyncio.to_thread(load_telegram_media_id, image_name)
+            if file_id:
+                SECTION_IMAGE_FILE_IDS[image_name] = file_id
+        try:
+            sent = await send_photo(
+                file_id or FSInputFile(str(image_path)),
+                caption=caption,
+                reply_markup=reply_markup,
+            )
+        except TelegramAPIError:
+            if not file_id:
+                log.exception("Could not send section image %s", image_path.name)
+                return await message.answer(caption, reply_markup=reply_markup)
+            log.warning("Cached Telegram image id for %s was rejected; retrying upload", image_path.name)
+            SECTION_IMAGE_FILE_IDS.pop(image_name, None)
+            await asyncio.to_thread(delete_telegram_media_id, image_name)
+            try:
+                sent = await send_photo(
+                    FSInputFile(str(image_path)),
+                    caption=caption,
+                    reply_markup=reply_markup,
+                )
+            except TelegramAPIError:
+                log.exception("Could not upload section image %s", image_path.name)
+                return await message.answer(caption, reply_markup=reply_markup)
+        if not file_id and getattr(sent, "photo", None):
+            file_id = sent.photo[-1].file_id
+            SECTION_IMAGE_FILE_IDS[image_name] = file_id
+            await asyncio.to_thread(save_telegram_media_id, image_name, file_id)
+        return sent
+    return await message.answer(caption, reply_markup=reply_markup)
+
+
+def load_telegram_media_id(name):
+    with connect_db() as conn:
+        row = conn.execute("SELECT file_id FROM telegram_media WHERE name=?", (name,)).fetchone()
+    return row[0] if row else None
+
+
+def save_telegram_media_id(name, file_id):
+    with connect_db() as conn:
+        conn.execute(
+            "INSERT INTO telegram_media (name, file_id) VALUES (?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET file_id=excluded.file_id",
+            (name, file_id),
+        )
+
+
+def delete_telegram_media_id(name):
+    with connect_db() as conn:
+        conn.execute("DELETE FROM telegram_media WHERE name=?", (name,))
+
+
 def colored_button(text, callback_data, style="primary"):
     return InlineKeyboardButton(text=text, callback_data=callback_data, style=style)
 
@@ -742,6 +841,8 @@ async def check_user(message):
         return False
 
     user = await asyncio.to_thread(register_user, message.from_user)
+    if user:
+        USER_LANGUAGE_CACHE[message.from_user.id] = "en" if user[5] == "en" else "ru"
     if user and user[3] in ("blocked", "suspended"):
         await message.answer(
             "⛔ Доступ временно ограничен.\nОбратитесь в поддержку."
@@ -801,6 +902,8 @@ async def start_handler(message: Message):
         return
 
     user = await asyncio.to_thread(register_user, message.from_user)
+    if user:
+        USER_LANGUAGE_CACHE[message.from_user.id] = "en" if user[5] == "en" else "ru"
     if user and user[3] in ("blocked", "suspended"):
         await message.answer("⛔ Доступ временно ограничен.\nОбратитесь в поддержку.")
         return
@@ -810,6 +913,7 @@ async def start_handler(message: Message):
     welcome_emoji = await custom_emoji_markup(message.bot, "🤖")
     welcome_text = (
         "🛡 <b>QUANTUM TRADE AI</b>\n\n"
+        "<b>ПРИВЕТСТВУЮ!</b>\n\n"
         f"{welcome_emoji} <b>Добро пожаловать в мир интеллектуальной торговли!</b>\n\n"
         "Мы анализируем рынок за вас, используя современные алгоритмы "
         "искусственного интеллекта, чтобы помочь вам принимать более "
@@ -834,15 +938,21 @@ async def start_handler(message: Message):
     animation = INTRO_GIF_FILE_ID or (
         FSInputFile(INTRO_GIF_PATH) if os.path.isfile(INTRO_GIF_PATH) else None
     )
+    welcome_intro = f"🛡 <b>QUANTUM TRADE AI</b>\n\n<b>ПРИВЕТСТВУЮ!</b>"
     try:
         if video:
-            await message.answer_video(video, caption=welcome_text, reply_markup=keyboard)
+            sent = await message.answer_video(video, caption=welcome_intro)
         elif animation:
-            await message.answer_animation(animation, caption=welcome_text, reply_markup=keyboard)
+            sent = await message.answer_animation(animation, caption=welcome_intro)
         else:
-            await message.answer(welcome_text, reply_markup=keyboard)
+            sent = await message.answer(welcome_intro)
+        await asyncio.sleep(0.35)
+        if sent.video or sent.animation:
+            await sent.edit_caption(caption=welcome_text, reply_markup=keyboard)
+        else:
+            await sent.edit_text(welcome_text, reply_markup=keyboard)
     except TelegramAPIError:
-        log.exception("Could not send welcome video; using text greeting")
+        log.exception("Could not animate welcome greeting; sending the full greeting")
         await message.answer(welcome_text, reply_markup=keyboard)
 
 
@@ -1271,10 +1381,14 @@ def localized_user_text(user_id, text):
 def chat_language(chat_id):
     if not isinstance(chat_id, int) or chat_id <= 0:
         return "ru"
+    if chat_id in USER_LANGUAGE_CACHE:
+        return USER_LANGUAGE_CACHE[chat_id]
     try:
         with connect_db() as conn:
             row = conn.execute("SELECT language FROM users WHERE user_id=?", (chat_id,)).fetchone()
-        return "en" if row and row[0] == "en" else "ru"
+        language = "en" if row and row[0] == "en" else "ru"
+        USER_LANGUAGE_CACHE[chat_id] = language
+        return language
     except Exception:
         log.exception("Could not look up preferred language for chat %s", chat_id)
         return "ru"
@@ -1404,7 +1518,9 @@ async def options_handler(message: Message):
         return
 
     section_emoji = await custom_emoji_markup(message.bot, "📈")
-    await message.answer(
+    await answer_section_card(
+        message,
+        "binary-signals.png",
         f"{section_emoji} <b>СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ</b>\n━━━━━━━━━━━━━━━━━━\n\n"
         "Выберите нужный раздел.\n\nСигналы и данные обновляются автоматически.",
         reply_markup=binary_menu_keyboard(),
@@ -1716,7 +1832,9 @@ async def calendar_handler(message: Message):
     if not await check_user(message):
         return
 
-    await message.answer(
+    await answer_section_card(
+        message,
+        "calendar-green.png",
         "📅 <b>ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "Календарь макроэкономических событий: время, страна, важность, "
@@ -1997,7 +2115,11 @@ async def history_handler(message: Message):
     manual_rows = [row for row in manual_rows if is_signal_record(row[1], row[4])]
 
     if not channel_rows and not manual_rows:
-        await message.answer("🕘 История сигналов пока пуста.")
+        await answer_section_card(
+            message,
+            "signal-history.png",
+            "<b>🕘 ИСТОРИЯ СИГНАЛОВ ЗА 24 ЧАСА</b>\n━━━━━━━━━━━━━━━━━━\n\nИстория сигналов пока пуста.",
+        )
         return
 
     text = "<b>🕘 ИСТОРИЯ СИГНАЛОВ ЗА 24 ЧАСА</b>\n━━━━━━━━━━━━━━━━━━\n"
@@ -2017,8 +2139,13 @@ async def history_handler(message: Message):
             "──────────────\n"
         )
 
+    await answer_section_card(
+        message,
+        "signal-history.png",
+        "<b>🕘 ИСТОРИЯ СИГНАЛОВ ЗА 24 ЧАСА</b>\n━━━━━━━━━━━━━━━━━━",
+    )
     answer_kwargs = {"parse_mode": ParseMode.HTML} if getattr(message, "bot", None) else {}
-    await message.answer(text[:4000], **answer_kwargs)
+    await message.answer(text.split("━━━━━━━━━━━━━━━━━━\n", 1)[-1][:3800], **answer_kwargs)
 
 
 def load_history_rows(since):
@@ -2057,7 +2184,9 @@ async def autotrade_handler(message: Message):
     if not await check_user(message):
         return
 
-    await message.answer(
+    await answer_section_card(
+        message,
+        "autotrade.png",
         "<b>🛡 QUANTUM TRADE AI — 🤖 АВТОМАТИЧЕСКИЙ БОТ</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         "ВЫБЕРИТЕ ДЕЙСТВИЕ:",
@@ -2193,7 +2322,9 @@ async def profile_handler(message: Message):
     }.get(user[3], "📴 НЕАКТИВЕН")
 
     profile_emoji = await custom_emoji_markup(message.bot, "👤")
-    await message.answer(
+    await answer_section_card(
+        message,
+        "profile.png",
         f"<b>{profile_emoji} ЛИЧНЫЙ КАБИНЕТ</b>\n"
         "━━━━━━━━━━━━━━━━━━\n\n"
         f"🆔 ID: {user[0]}\n"
