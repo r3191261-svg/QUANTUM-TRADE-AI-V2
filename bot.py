@@ -425,7 +425,6 @@ def init_db():
         conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_created_at ON signals(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_events_created_at ON delivery_events(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_events_source_user ON delivery_events(source_message_id, user_id)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_delivery_targets ON users(status, notifications, signals_consent)")
         if DATABASE_URL:
             # Telegram IDs exceed PostgreSQL's 32-bit INTEGER range. Upgrade
             # projects created by earlier versions before inserting admin IDs.
@@ -446,6 +445,7 @@ def init_db():
         columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "signals_consent" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN signals_consent INTEGER DEFAULT -1")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_delivery_targets ON users(status, notifications, signals_consent)")
         if "intro_sent" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN intro_sent INTEGER DEFAULT 0")
         if "favorite_pairs" not in columns:
