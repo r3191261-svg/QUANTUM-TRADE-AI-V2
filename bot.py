@@ -3419,7 +3419,6 @@ async def main():
             BotCommand(command="app", description="Открыть Mini App"),
             BotCommand(command="signals", description="Сигналы для бинарных опционов"),
             BotCommand(command="calendar", description="Экономический календарь"),
-            BotCommand(command="stats", description="Результаты за последние 24 часа"),
             BotCommand(command="history", description="История сигналов за сутки"),
             BotCommand(command="autotrade", description="Подключение автоторговли"),
             BotCommand(command="notifications", description="Настройки уведомлений"),
