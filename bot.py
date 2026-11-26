@@ -913,7 +913,6 @@ async def start_handler(message: Message):
     welcome_emoji = await custom_emoji_markup(message.bot, "🤖")
     welcome_text = (
         "🛡 <b>QUANTUM TRADE AI</b>\n\n"
-        "<b>ПРИВЕТСТВУЮ!</b>\n\n"
         f"{welcome_emoji} <b>Добро пожаловать в мир интеллектуальной торговли!</b>\n\n"
         "Мы анализируем рынок за вас, используя современные алгоритмы "
         "искусственного интеллекта, чтобы помочь вам принимать более "
@@ -932,13 +931,25 @@ async def start_handler(message: Message):
             [colored_button("❌ ОТКЛОНИТЬ", "signals_decline", "danger")],
         ])
 
-    # Send the supplied promo clip with every /start greeting. Fall back to
-    # the original GIF if the MP4 asset is unavailable in the deployment.
+    # Begin with a single short greeting, then reveal the welcome in a few
+    # smooth edits on the same media message (no extra chat messages).
     video = FSInputFile(INTRO_VIDEO_PATH) if os.path.isfile(INTRO_VIDEO_PATH) else None
     animation = INTRO_GIF_FILE_ID or (
         FSInputFile(INTRO_GIF_PATH) if os.path.isfile(INTRO_GIF_PATH) else None
     )
-    welcome_intro = f"🛡 <b>QUANTUM TRADE AI</b>\n\n<b>ПРИВЕТСТВУЮ!</b>"
+    welcome_intro = "<b>ПРИВЕТСТВУЮ!</b>"
+    first_frame = (
+        f"🛡 <b>QUANTUM TRADE AI</b>\n\n"
+        f"{welcome_emoji} <b>Добро пожаловать в мир интеллектуальной торговли!</b>"
+    )
+    second_frame = (
+        first_frame
+        + "\n\nМы анализируем рынок за вас, используя современные алгоритмы "
+        "искусственного интеллекта,"
+    )
+    frames = (first_frame, second_frame, welcome_text)
+    sent = None
+    has_media = bool(video or animation)
     try:
         if video:
             sent = await message.answer_video(video, caption=welcome_intro)
@@ -946,14 +957,29 @@ async def start_handler(message: Message):
             sent = await message.answer_animation(animation, caption=welcome_intro)
         else:
             sent = await message.answer(welcome_intro)
-        await asyncio.sleep(0.35)
-        if sent.video or sent.animation:
-            await sent.edit_caption(caption=welcome_text, reply_markup=keyboard)
-        else:
-            await sent.edit_text(welcome_text, reply_markup=keyboard)
     except TelegramAPIError:
-        log.exception("Could not animate welcome greeting; sending the full greeting")
-        await message.answer(welcome_text, reply_markup=keyboard)
+        log.exception("Could not send welcome media; falling back to a text greeting")
+        has_media = False
+        sent = await message.answer(welcome_intro)
+
+    for index, frame in enumerate(frames):
+        await asyncio.sleep(0.22)
+        try:
+            final_frame = index == len(frames) - 1
+            if has_media and (sent.video or sent.animation):
+                await sent.edit_caption(
+                    caption=frame,
+                    reply_markup=keyboard if final_frame else None,
+                )
+            else:
+                await sent.edit_text(
+                    frame,
+                    reply_markup=keyboard if final_frame else None,
+                )
+        except TelegramAPIError:
+            log.exception("Could not animate welcome text frame %s", index + 1)
+            if index != len(frames) - 1:
+                continue
 
 
 @user_dp.message(Command("app"))
