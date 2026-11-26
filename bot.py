@@ -422,6 +422,10 @@ def init_db():
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_source_posts_created_at ON source_posts(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_news_published_at ON news(published_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_signals_created_at ON signals(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_events_created_at ON delivery_events(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_events_source_user ON delivery_events(source_message_id, user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_delivery_targets ON users(status, notifications, signals_consent)")
         if DATABASE_URL:
             # Telegram IDs exceed PostgreSQL's 32-bit INTEGER range. Upgrade
             # projects created by earlier versions before inserting admin IDs.
@@ -934,29 +938,34 @@ async def setup_custom_emojis(bot):
     if not callable(get_sticker_set):
         return
     pencil_check_id = None
-    for pack_name in CUSTOM_EMOJI_PACK_NAMES:
+    pack_limit = asyncio.Semaphore(4)
+
+    async def fetch_pack(pack_name):
         try:
-            sticker_set = await get_sticker_set(pack_name)
-            pack_count = 0
-            for sticker_number, sticker in enumerate(sticker_set.stickers, start=1):
-                custom_id = getattr(sticker, "custom_emoji_id", None)
-                emoji = sticker.emoji or ""
-                is_animated = bool(
-                    getattr(sticker, "is_animated", False)
-                    or getattr(sticker, "is_video", False)
-                )
-                if (
-                    pack_name == "PencilEmoji"
-                    and sticker_number == 12
-                    and custom_id
-                ):
-                    pencil_check_id = custom_id
-                if custom_id and is_animated and is_single_emoji_fallback(emoji):
-                    _CUSTOM_EMOJI_PACK.setdefault(emoji, []).append(custom_id)
-                    pack_count += 1
-            log.info("Loaded %d custom emojis from %s", pack_count, pack_name)
+            async with pack_limit:
+                return pack_name, await get_sticker_set(pack_name)
         except Exception:
             log.exception("Could not load custom emoji pack %s", pack_name)
+            return pack_name, None
+
+    sticker_sets = await asyncio.gather(*(fetch_pack(name) for name in CUSTOM_EMOJI_PACK_NAMES))
+    for pack_name, sticker_set in sticker_sets:
+        if sticker_set is None:
+            continue
+        pack_count = 0
+        for sticker_number, sticker in enumerate(sticker_set.stickers, start=1):
+            custom_id = getattr(sticker, "custom_emoji_id", None)
+            emoji = sticker.emoji or ""
+            is_animated = bool(
+                getattr(sticker, "is_animated", False)
+                or getattr(sticker, "is_video", False)
+            )
+            if pack_name == "PencilEmoji" and sticker_number == 12 and custom_id:
+                pencil_check_id = custom_id
+            if custom_id and is_animated and is_single_emoji_fallback(emoji):
+                _CUSTOM_EMOJI_PACK.setdefault(emoji, []).append(custom_id)
+                pack_count += 1
+        log.info("Loaded %d custom emojis from %s", pack_count, pack_name)
     # Do not allow a different pack's gray check to become the fallback.
     _CUSTOM_EMOJI_PACK["✅"] = [pencil_check_id] if pencil_check_id else []
     if pencil_check_id:
@@ -1578,7 +1587,6 @@ async def binary_menu(callback: CallbackQuery):
 async def news_handler(message: Message):
     if not await check_user(message):
         return
-    await fetch_and_store_news()
     await show_news_page(message, 0)
 
 
@@ -1644,12 +1652,15 @@ async def news_page_callback(callback: CallbackQuery):
 
 @user_dp.callback_query(F.data == "news_refresh")
 async def news_refresh_callback(callback: CallbackQuery):
-    await fetch_and_store_news()
+    # Do not hold up the callback on a remote RSS server. The periodic worker
+    # keeps the local feed warm; this request refreshes it in the background.
+    if NEWS_REPUBLISH_ALLOWED:
+        asyncio.create_task(fetch_and_store_news())
     await show_news_page(callback, 0)
     await callback.answer(
         localized_user_text(
             callback.from_user.id,
-            "Лента обновлена" if NEWS_REPUBLISH_ALLOWED else "Откройте официальный сайт Investing.com",
+            "Обновление запущено" if NEWS_REPUBLISH_ALLOWED else "Откройте официальный сайт Investing.com",
         )
     )
 
@@ -2498,7 +2509,7 @@ async def signals_pro_channel_handler(message: Message, bot: Bot):
 
     sent = 0
     failed = 0
-    delivery_limit = asyncio.Semaphore(8)
+    delivery_limit = asyncio.Semaphore(12)
 
     async def deliver(user_id):
         nonlocal sent, failed
@@ -2604,7 +2615,7 @@ async def signals_pro_edited_handler(message: Message, bot: Bot):
         persist_source_edit, message.message_id, source_text, edited_at
     )
     updated = 0
-    semaphore = asyncio.Semaphore(8)
+    semaphore = asyncio.Semaphore(12)
 
     async def update_recipient(user_id, copied_id):
         nonlocal updated
@@ -2806,38 +2817,20 @@ async def publish_signal(message: Message, bot: Bot):
     if USER_BOT is None:
         await message.answer("⛔ Пользовательский бот не запущен. Сигнал не отправлен.")
         return
-    action_key = f"signal:{message.chat.id}:{message.message_id}"
-    with connect_db() as conn:
-        inserted = conn.execute(
-            "INSERT INTO admin_actions (action_key, created_at) VALUES (?, ?) "
-            "ON CONFLICT DO NOTHING",
-            (action_key, now()),
-        ).rowcount
-    if not inserted:
+    prepared = await asyncio.to_thread(
+        prepare_manual_signal,
+        message.chat.id,
+        message.message_id,
+        message.from_user.id,
+        instrument,
+        direction,
+        timeframe,
+        details,
+    )
+    if prepared is None:
         await message.answer("Эта команда уже обработана; повторная рассылка отменена.")
         return
-
-    with connect_db() as conn:
-        cursor = conn.execute("""
-            INSERT INTO signals
-            (instrument, direction, timeframe, details, created_at, created_by, source_message_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """ + (" RETURNING id" if DATABASE_URL else ""), (
-            instrument,
-            direction,
-            timeframe,
-            details,
-            now(),
-            message.from_user.id,
-            message.message_id,
-        ))
-        signal_id = cursor.fetchone()[0] if DATABASE_URL else cursor.lastrowid
-
-        recipients = conn.execute("""
-            SELECT user_id
-            FROM users
-            WHERE status='active' AND notifications=1 AND signals_consent=1
-        """).fetchall()
+    signal_id, recipients = prepared
 
     text = (
         "🔔 НОВЫЙ СИГНАЛ QUANTUM TRADE AI\n"
@@ -2851,30 +2844,69 @@ async def publish_signal(message: Message, bot: Bot):
         "⚠️ Информационный сигнал. Не является гарантией результата."
     )
 
-    sent = 0
-    failed = 0
+    sent, failed = await deliver_bulk_messages(
+        USER_BOT, recipients, text, message.message_id, "manual_signal_delivery"
+    )
 
-    for (user_id,) in recipients:
-        try:
-            await USER_BOT.send_message(user_id, text)
-            record_delivery(message.message_id, user_id, "sent")
-            sent += 1
-            await asyncio.sleep(0.05)
-        except TelegramAPIError as error:
-            failed += 1
-            try:
-                record_delivery(message.message_id, user_id, "failed", error)
-                record_runtime_error("manual_signal_delivery", error)
-            except Exception:
-                log.exception("Could not record manual signal delivery failure")
-
-    audit(message.from_user.id, "publish_signal", signal_id)
+    await asyncio.to_thread(audit, message.from_user.id, "publish_signal", signal_id)
 
     await message.answer(
         f"✅ Сигнал №{signal_id} опубликован.\n\n"
         f"Доставлено: {sent}\n"
         f"Ошибок доставки: {failed}"
     )
+
+
+def prepare_manual_signal(chat_id, message_id, actor_id, instrument, direction, timeframe, details):
+    """Atomically deduplicate a manual signal, save it, and return its recipients."""
+    action_key = f"signal:{chat_id}:{message_id}"
+    with connect_db() as conn:
+        inserted = conn.execute(
+            "INSERT INTO admin_actions (action_key, created_at) VALUES (?, ?) "
+            "ON CONFLICT DO NOTHING",
+            (action_key, now()),
+        ).rowcount
+        if not inserted:
+            return None
+        cursor = conn.execute("""
+            INSERT INTO signals
+            (instrument, direction, timeframe, details, created_at, created_by, source_message_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """ + (" RETURNING id" if DATABASE_URL else ""), (
+            instrument, direction, timeframe, details, now(), actor_id, message_id,
+        ))
+        signal_id = cursor.fetchone()[0] if DATABASE_URL else cursor.lastrowid
+        recipients = conn.execute("""
+            SELECT user_id FROM users
+            WHERE status='active' AND notifications=1 AND signals_consent=1
+        """).fetchall()
+    return signal_id, recipients
+
+
+async def deliver_bulk_messages(delivery_bot, recipients, text, source_message_id, component):
+    """Deliver to multiple recipients concurrently while keeping per-chat/API load bounded."""
+    semaphore = asyncio.Semaphore(12)
+    counts = {"sent": 0, "failed": 0}
+
+    async def deliver(user_id):
+        try:
+            async with semaphore:
+                await delivery_bot.send_message(user_id, text)
+            await asyncio.to_thread(record_delivery, source_message_id, user_id, "sent")
+            counts["sent"] += 1
+        except TelegramAPIError as error:
+            counts["failed"] += 1
+            log.warning("%s failed for user %s: %s", component, user_id, error)
+            await asyncio.to_thread(record_delivery, source_message_id, user_id, "failed", error)
+            await asyncio.to_thread(record_runtime_error, component, error)
+        except Exception as error:
+            counts["failed"] += 1
+            log.exception("Unexpected %s failure for user %s", component, user_id)
+            await asyncio.to_thread(record_delivery, source_message_id, user_id, "failed", error)
+            await asyncio.to_thread(record_runtime_error, component, error)
+
+    await asyncio.gather(*(deliver(user_id) for user_id, in recipients))
+    return counts["sent"], counts["failed"]
 
 
 # =========================================================
@@ -2891,50 +2923,47 @@ async def broadcast(message: Message, bot: Bot):
         await message.answer("Формат:\n/broadcast Текст сообщения")
         return
 
-    action_key = f"broadcast:{message.chat.id}:{message.message_id}"
-    with connect_db() as conn:
-        inserted = conn.execute(
-            "INSERT INTO admin_actions (action_key, created_at) VALUES (?, ?) "
-            "ON CONFLICT DO NOTHING",
-            (action_key, now()),
-        ).rowcount
-    if not inserted:
+    prepared = await asyncio.to_thread(
+        prepare_broadcast_recipients, message.chat.id, message.message_id
+    )
+    if prepared is None:
         await message.answer("Эта рассылка уже обработана; повторная отправка отменена.")
         return
-
-    with connect_db() as conn:
-        users = conn.execute("""
-            SELECT user_id
-            FROM users
-            WHERE status='active' AND notifications=1 AND signals_consent=1
-        """).fetchall()
+    users = prepared
 
     delivery_bot = USER_BOT
     if delivery_bot is None:
         await message.answer("⛔ Основной бот ещё не запущен. Рассылка не выполнена.")
         return
 
-    sent = 0
-    failed = 0
+    sent, failed = await deliver_bulk_messages(
+        delivery_bot, users, html.escape(parts[1]), message.message_id, "broadcast_delivery"
+    )
 
-    for (user_id,) in users:
-        try:
-            await delivery_bot.send_message(user_id, html.escape(parts[1]))
-            record_delivery(message.message_id, user_id, "sent")
-            sent += 1
-            await asyncio.sleep(0.05)
-        except TelegramAPIError as error:
-            failed += 1
-            record_delivery(message.message_id, user_id, "failed", error)
-            record_runtime_error("broadcast_delivery", error)
-
-    audit(message.from_user.id, "broadcast")
+    await asyncio.to_thread(audit, message.from_user.id, "broadcast")
 
     await message.answer(
         "📢 РАССЫЛКА ЗАВЕРШЕНА\n\n"
         f"Отправлено: {sent}\n"
         f"Ошибок: {failed}"
     )
+
+
+def prepare_broadcast_recipients(chat_id, message_id):
+    """Deduplicate a broadcast and fetch eligible recipients in one DB round-trip."""
+    action_key = f"broadcast:{chat_id}:{message_id}"
+    with connect_db() as conn:
+        inserted = conn.execute(
+            "INSERT INTO admin_actions (action_key, created_at) VALUES (?, ?) "
+            "ON CONFLICT DO NOTHING",
+            (action_key, now()),
+        ).rowcount
+        if not inserted:
+            return None
+        return conn.execute("""
+            SELECT user_id FROM users
+            WHERE status='active' AND notifications=1 AND signals_consent=1
+        """).fetchall()
 
 
 @admin_dp.message(Command("reply"))
