@@ -187,6 +187,13 @@ async def app_static(request):
     return web.FileResponse(WEB_ROOT / name)
 
 
+async def app_image(request):
+    name = request.match_info["name"]
+    if name not in {"welcome-dashboard.png", "notifications.png"}:
+        raise web.HTTPNotFound()
+    return web.FileResponse(WEB_ROOT / "images" / name)
+
+
 async def api_me(request):
     user_id = int(request["telegram_user"]["id"])
     profile = await asyncio.to_thread(load_app_profile, user_id)
@@ -257,6 +264,7 @@ def create_app():
     app = web.Application(middlewares=[api_auth_middleware], client_max_size=16 * 1024)
     app.router.add_get("/healthz", health)
     app.router.add_get("/", app_index)
+    app.router.add_get("/images/{name}", app_image)
     app.router.add_get("/{name}", app_static)
     app.router.add_get("/api/me", api_me)
     app.router.add_get("/api/signals", api_signals)
