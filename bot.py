@@ -630,12 +630,12 @@ async def fetch_and_store_news():
 def build_main_keyboard(mini_app_url=MINI_APP_URL):
     keyboard = [
         [KeyboardButton(text="📈 СИГНАЛЫ ДЛЯ БИНАРНЫХ ОПЦИОНОВ", style="primary")],
-        [KeyboardButton(text="🗓 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="success")],
+        [KeyboardButton(text="🗓 ЭКОНОМИЧЕСКИЙ КАЛЕНДАРЬ", style="danger")],
         [KeyboardButton(text="🕘 ИСТОРИЯ СИГНАЛОВ", style="danger")],
         [KeyboardButton(text="🤖 АВТОМАТИЧЕСКИЙ БОТ", style="primary")],
-        [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="success")],
+        [KeyboardButton(text="🔔 УВЕДОМЛЕНИЯ", style="primary")],
         [
-            KeyboardButton(text="👤 МОЙ ПРОФИЛЬ", style="success"),
+            KeyboardButton(text="👤 МОЙ ПРОФИЛЬ", style="primary"),
         ],
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
@@ -665,8 +665,8 @@ def signal_action_keyboard():
 
 def broker_choice_keyboard(back_callback="broker_back_autotrade"):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="INTRADE BAR", url=REGISTRATION_URL, style="success")],
-        [InlineKeyboardButton(text="BinoDex", url=BINODEX_REGISTRATION_URL, style="success")],
+        [InlineKeyboardButton(text="INTRADE BAR", url=REGISTRATION_URL, style="primary")],
+        [InlineKeyboardButton(text="BinoDex", url=BINODEX_REGISTRATION_URL, style="primary")],
         [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback, style="primary")],
     ])
 
@@ -676,11 +676,11 @@ def autotrade_keyboard():
         [InlineKeyboardButton(
             text="➡️ Регистрация у брокера",
             callback_data="choose_broker",
-            style="success",
+            style="primary",
         )],
         [InlineKeyboardButton(
             text="➡️ Подключить автоторговлю",
-            style="success",
+            style="primary",
             url=SUPPORT_URL,
         )],
     ])
@@ -1811,8 +1811,6 @@ def compact_signal_text(details):
     return " · ".join(parts)
 
 
-@user_dp.message(Command("stats"))
-@user_dp.message(F.text.in_({"📊 СТАТИСТИКА", "СТАТИСТИКА", "📈 Статистика", "Статистика", "STATISTICS"}))
 async def statistics_handler(message: Message):
     if not await check_user(message):
         return
@@ -3416,10 +3414,9 @@ async def main():
 
         user_commands = [
             BotCommand(command="start", description="Открыть главное меню"),
-            BotCommand(command="app", description="Открыть Mini App"),
             BotCommand(command="signals", description="Сигналы для бинарных опционов"),
             BotCommand(command="calendar", description="Экономический календарь"),
-            BotCommand(command="history", description="История сигналов за сутки"),
+            BotCommand(command="history", description="История сигналов"),
             BotCommand(command="autotrade", description="Подключение автоторговли"),
             BotCommand(command="notifications", description="Настройки уведомлений"),
             BotCommand(command="profile", description="Мой профиль"),
